@@ -69,6 +69,9 @@ export const api = {
     reject: (token, id, revisionNotes) =>
       request(`/tasks/${id}/reject`, { method: 'POST', token, body: { revisionNotes } }),
 
+    getById: (token, id) => request(`/tasks/${id}`, { token }),
+    submitById: (token, id, data) => request(`/tasks/${id}`, { method: 'PUT', token, body: data }),
+
     getByAccessToken: (accessToken) => request(`/tasks/token/${accessToken}`),
     submitByAccessToken: (accessToken, data) =>
       request(`/tasks/token/${accessToken}`, { method: 'PUT', body: data }),

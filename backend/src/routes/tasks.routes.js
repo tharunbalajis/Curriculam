@@ -69,12 +69,104 @@ const taskListInclude = {
   assigned_by_user: true,
 };
 
+const fillInclude = {
+  course: { include: courseInclude },
+  department: true,
+};
+
+// Shared by the token-based fill route (GET /token/:token) and the
+// authenticated faculty route (GET /:id) — both a course-fill fetch resolves
+// to the exact same response shape regardless of how the caller got there.
+async function maybeStartProgress(prisma, task) {
+  if (task.status !== 'assigned') return task;
+  return prisma.tasks.update({
+    where: { id: task.id },
+    data: { status: 'in_progress' },
+    include: fillInclude,
+  });
+}
+
+function shapeFillResponse(task) {
+  const readOnly = task.status === 'submitted' || task.status === 'approved';
+  return {
+    taskId: task.id,
+    status: task.status,
+    deadline: task.deadline,
+    revisionNotes: task.revision_notes,
+    readOnly,
+    department: { id: task.department.id, name: task.department.name },
+    course: sanitizeCourse(task.course),
+  };
+}
+
+// Shared by the token-based submit route (PUT /token/:token) and the
+// authenticated faculty route (PUT /:id) — same update logic either way.
+async function submitCourseForTask(prisma, task, body) {
+  // course_code / course_title are intentionally never applied here, even if
+  // present in the body — faculty cannot rename the course they were assigned.
+  await prisma.courses.update({
+    where: { id: task.course_id },
+    data: buildScalarCourseData(body, { includeCodeAndTitle: false }),
+  });
+  await replaceCourseChildren(prisma, task.course_id, body);
+
+  const updatedTask = await prisma.tasks.update({
+    where: { id: task.id },
+    data: { status: 'submitted', submitted_at: new Date() },
+  });
+
+  const [subAdmin, faculty] = await Promise.all([
+    prisma.users.findFirst({ where: { department_id: task.department_id, role: 'sub_admin' } }),
+    task.assigned_to ? prisma.users.findUnique({ where: { id: task.assigned_to } }) : null,
+  ]);
+
+  if (subAdmin) {
+    // sendSubmissionEmail already catches its own errors internally (logs
+    // and returns) so a missing/broken SMTP config never blocks a submission.
+    await emailService.sendSubmissionEmail({
+      to: subAdmin.email,
+      facultyName: faculty?.name || 'Faculty',
+      courseCode: task.course.course_code,
+      link: `${process.env.FRONTEND_URL}/review/${task.access_token}`,
+    });
+  }
+
+  const course = await prisma.courses.findUnique({ where: { id: task.course_id }, include: courseInclude });
+  return { updatedTask, course };
+}
+
+const submitBodySchema = {
+  type: 'object',
+  properties: {
+    academicYear: { type: 'string' },
+    semester: { type: 'integer', minimum: 1, maximum: 8 },
+    lectureHours: { type: 'integer', minimum: 0 },
+    tutorialHours: { type: 'integer', minimum: 0 },
+    practicalHours: { type: 'integer', minimum: 0 },
+    caMarks: { type: 'integer', minimum: 0 },
+    eseMarks: { type: 'integer', minimum: 0 },
+    category: { type: 'string', enum: ['BS', 'HS', 'ES', 'PC', 'PE', 'OE', 'EEC', 'MC'] },
+    introduction: { type: 'string' },
+    totalLecturePeriods: { type: 'integer' },
+    totalTutorialPeriods: { type: 'integer' },
+    ...courseChildSchema,
+  },
+  additionalProperties: true,
+};
+
 async function tasksRoutes(fastify, options) {
+  // GET /api/tasks — sub_admin sees their department's tasks (unchanged);
+  // faculty sees only tasks assigned to them.
   fastify.get('/', {
-    preHandler: [fastify.authenticate, fastify.authorize(['sub_admin'])],
+    preHandler: [fastify.authenticate, fastify.authorize(['sub_admin', 'faculty'])],
     handler: async (request) => {
+      const where =
+        request.user.role === 'faculty'
+          ? { assigned_to: request.user.id }
+          : { department_id: request.user.departmentId };
+
       const tasks = await fastify.prisma.tasks.findMany({
-        where: { department_id: request.user.departmentId },
+        where,
         include: taskListInclude,
         orderBy: { created_at: 'desc' },
       });
@@ -137,6 +229,59 @@ async function tasksRoutes(fastify, options) {
     },
   });
 
+  // GET /api/tasks/:id — authenticated fill fetch. top_admin: any task;
+  // sub_admin: own department only; faculty: only their own assigned task.
+  // This is the JWT-based counterpart to GET /token/:token below — same
+  // response shape, same auto "assigned -> in_progress" transition.
+  fastify.get('/:id', {
+    preHandler: [fastify.authenticate, fastify.authorize(['top_admin', 'sub_admin', 'faculty'])],
+    schema: { params: { type: 'object', required: ['id'], properties: { id: { type: 'string' } } } },
+    handler: async (request) => {
+      let task = await fastify.prisma.tasks.findUnique({
+        where: { id: request.params.id },
+        include: fillInclude,
+      });
+      if (!task) throw fastify.httpErrors.notFound('Task not found');
+
+      if (request.user.role === 'faculty' && task.assigned_to !== request.user.id) {
+        throw fastify.httpErrors.forbidden('This task is not assigned to you');
+      }
+      if (request.user.role === 'sub_admin' && task.department_id !== request.user.departmentId) {
+        throw fastify.httpErrors.forbidden('This task does not belong to your department');
+      }
+
+      task = await maybeStartProgress(fastify.prisma, task);
+      return shapeFillResponse(task);
+    },
+  });
+
+  // PUT /api/tasks/:id — authenticated faculty submit path. Ownership is
+  // checked against assigned_to regardless of role, mirroring exactly the
+  // same update logic as the token-based PUT /token/:token below.
+  fastify.put('/:id', {
+    preHandler: [fastify.authenticate, fastify.authorize(['faculty'])],
+    schema: {
+      params: { type: 'object', required: ['id'], properties: { id: { type: 'string' } } },
+      body: submitBodySchema,
+    },
+    handler: async (request, reply) => {
+      const task = await fastify.prisma.tasks.findUnique({
+        where: { id: request.params.id },
+        include: { course: true, department: true },
+      });
+      if (!task) throw fastify.httpErrors.notFound('Task not found');
+      if (task.assigned_to !== request.user.id) {
+        throw fastify.httpErrors.forbidden('This task is not assigned to you');
+      }
+      if (task.status === 'submitted' || task.status === 'approved') {
+        return reply.code(409).send({ message: 'This submission is read-only and can no longer be edited.' });
+      }
+
+      const { updatedTask, course } = await submitCourseForTask(fastify.prisma, task, request.body);
+      return { ...sanitizeTask(updatedTask), course: sanitizeCourse(course) };
+    },
+  });
+
   fastify.post('/:id/approve', {
     preHandler: [fastify.authenticate, fastify.authorize(['sub_admin'])],
     schema: { params: { type: 'object', required: ['id'], properties: { id: { type: 'string' } } } },
@@ -170,60 +315,26 @@ async function tasksRoutes(fastify, options) {
     },
   });
 
-  // ---- Public, token-authorized routes (faculty fill flow) ----
+  // ---- Public, token-authorized routes (emailed-link fill flow) ----
 
   fastify.get('/token/:token', {
     schema: { params: { type: 'object', required: ['token'], properties: { token: { type: 'string' } } } },
     handler: async (request) => {
       let task = await fastify.prisma.tasks.findUnique({
         where: { access_token: request.params.token },
-        include: { course: { include: courseInclude }, department: true },
+        include: fillInclude,
       });
       if (!task) throw fastify.httpErrors.notFound('Task not found');
 
-      if (task.status === 'assigned') {
-        task = await fastify.prisma.tasks.update({
-          where: { id: task.id },
-          data: { status: 'in_progress' },
-          include: { course: { include: courseInclude }, department: true },
-        });
-      }
-
-      const readOnly = task.status === 'submitted' || task.status === 'approved';
-
-      return {
-        taskId: task.id,
-        status: task.status,
-        deadline: task.deadline,
-        revisionNotes: task.revision_notes,
-        readOnly,
-        department: { id: task.department.id, name: task.department.name },
-        course: sanitizeCourse(task.course),
-      };
+      task = await maybeStartProgress(fastify.prisma, task);
+      return shapeFillResponse(task);
     },
   });
 
   fastify.put('/token/:token', {
     schema: {
       params: { type: 'object', required: ['token'], properties: { token: { type: 'string' } } },
-      body: {
-        type: 'object',
-        properties: {
-          academicYear: { type: 'string' },
-          semester: { type: 'integer', minimum: 1, maximum: 8 },
-          lectureHours: { type: 'integer', minimum: 0 },
-          tutorialHours: { type: 'integer', minimum: 0 },
-          practicalHours: { type: 'integer', minimum: 0 },
-          caMarks: { type: 'integer', minimum: 0 },
-          eseMarks: { type: 'integer', minimum: 0 },
-          category: { type: 'string', enum: ['BS', 'HS', 'ES', 'PC', 'PE', 'OE', 'EEC', 'MC'] },
-          introduction: { type: 'string' },
-          totalLecturePeriods: { type: 'integer' },
-          totalTutorialPeriods: { type: 'integer' },
-          ...courseChildSchema,
-        },
-        additionalProperties: true,
-      },
+      body: submitBodySchema,
     },
     handler: async (request, reply) => {
       const task = await fastify.prisma.tasks.findUnique({
@@ -236,37 +347,7 @@ async function tasksRoutes(fastify, options) {
         return reply.code(409).send({ message: 'This submission is read-only and can no longer be edited.' });
       }
 
-      // course_code / course_title are intentionally never applied here, even
-      // if present in the body — faculty cannot rename the course they were assigned.
-      await fastify.prisma.courses.update({
-        where: { id: task.course_id },
-        data: buildScalarCourseData(request.body, { includeCodeAndTitle: false }),
-      });
-      await replaceCourseChildren(fastify.prisma, task.course_id, request.body);
-
-      const updatedTask = await fastify.prisma.tasks.update({
-        where: { id: task.id },
-        data: { status: 'submitted', submitted_at: new Date() },
-      });
-
-      const subAdmin = await fastify.prisma.users.findFirst({
-        where: { department_id: task.department_id, role: 'sub_admin' },
-      });
-
-      if (subAdmin) {
-        try {
-          await emailService.sendSubmissionEmail({
-            to: subAdmin.email,
-            facultyName: request.body.facultyName || 'Faculty',
-            courseCode: task.course.course_code,
-            link: `${process.env.FRONTEND_URL}/review/${task.access_token}`,
-          });
-        } catch (err) {
-          fastify.log.error({ err }, 'Failed to send submission email');
-        }
-      }
-
-      const course = await fastify.prisma.courses.findUnique({ where: { id: task.course_id }, include: courseInclude });
+      const { updatedTask, course } = await submitCourseForTask(fastify.prisma, task, request.body);
       return { ...sanitizeTask(updatedTask), course: sanitizeCourse(course) };
     },
   });

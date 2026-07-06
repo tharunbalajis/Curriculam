@@ -62,6 +62,15 @@ async function usersRoutes(fastify, options) {
     handler: async (request, reply) => {
       const { name, email, password, role, departmentId } = request.body;
 
+      // Institutional email domain is required for faculty accounts only —
+      // sub_admin and top_admin may use any valid email. This check is scoped
+      // to account creation and must never be applied to /auth/login.
+      if (role === 'faculty' && !email.toLowerCase().endsWith('@currisync.edu')) {
+        throw fastify.httpErrors.badRequest(
+          'Faculty accounts must use an institutional (@currisync.edu) email address.'
+        );
+      }
+
       const department = await fastify.prisma.departments.findUnique({ where: { id: departmentId } });
       if (!department) {
         throw fastify.httpErrors.badRequest('Department not found');

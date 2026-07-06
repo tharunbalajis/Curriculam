@@ -11,6 +11,16 @@ function computeTotalMarks(caMarks, eseMarks) {
   return ca + ese;
 }
 
+// Mirrors backend/src/services/periodsCalculator.js exactly. Periods are a
+// pure display-derived value on top of `credits` — not new source data —
+// so there's no API call for this; it's recomputed client-side from the
+// same credits the LTPC fields already produce.
+function calculatePeriods(credits, unitCount = 5) {
+  const totalPeriods = Number(credits) * 15;
+  const periodsPerUnit = Math.round(totalPeriods / unitCount);
+  return { totalPeriods, periodsPerUnit };
+}
+
 const CATEGORIES = ['BS', 'HS', 'ES', 'PC', 'PE', 'OE', 'EEC', 'MC'];
 
 function Field({ label, children }) {
@@ -50,6 +60,8 @@ export default function CourseForm({ course, onChange, disabledFields = [], read
 
   const credits = computeCredits(course.lectureHours, course.tutorialHours, course.practicalHours);
   const totalMarks = computeTotalMarks(course.caMarks, course.eseMarks);
+  const unitCount = course.syllabusUnits?.length || 5;
+  const { totalPeriods, periodsPerUnit } = calculatePeriods(credits, unitCount);
 
   return (
     <div className="space-y-8">
@@ -242,7 +254,7 @@ export default function CourseForm({ course, onChange, disabledFields = [], read
                     onChange={(e) => setArrayItem('syllabusUnits', idx, { unitNumber: Number(e.target.value) })}
                   />
                 </Field>
-                <Field label="Unit Title">
+                <Field label={`Unit Title (≈${periodsPerUnit} periods)`}>
                   <input
                     className={inputClass}
                     value={unit.unitTitle || ''}
@@ -283,6 +295,9 @@ export default function CourseForm({ course, onChange, disabledFields = [], read
             </div>
           ))}
         </div>
+        <p className="mt-3 text-sm text-slate-500">
+          Total Periods: <span className="font-medium text-slate-700">{totalPeriods}</span>
+        </p>
       </section>
 
       <section>
