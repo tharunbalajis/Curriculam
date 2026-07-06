@@ -1,0 +1,148 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model departments {
+  id         String    @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  name       String    @db.VarChar(255)
+  code       String    @unique @db.VarChar(10)
+  created_at DateTime? @default(now()) @db.Timestamp(6)
+  courses    courses[]
+  tasks      tasks[]
+  users      users[]
+}
+
+model users {
+  id                String       @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  name              String       @db.VarChar(255)
+  email             String       @unique @db.VarChar(255)
+  password          String       @db.VarChar(255)
+  /// CHECK (role IN ('top_admin', 'sub_admin', 'faculty'))
+  role              String       @db.VarChar(20)
+  department_id     String?      @db.Uuid
+  created_at        DateTime?    @default(now()) @db.Timestamp(6)
+  updated_at        DateTime?    @default(now()) @db.Timestamp(6)
+  audit_logs        audit_logs[]
+  tasks_assigned_by tasks[]      @relation("TaskAssignedBy")
+  tasks_assigned_to tasks[]      @relation("TaskAssignedTo")
+  department        departments? @relation(fields: [department_id], references: [id], onUpdate: NoAction)
+
+  @@index([department_id], map: "idx_users_department")
+  @@index([role], map: "idx_users_role")
+}
+
+model courses {
+  id                     String            @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  course_code            String            @unique @db.VarChar(20)
+  course_title           String
+  department_id          String?           @db.Uuid
+  academic_year          String            @default("2025-2026") @db.VarChar(20)
+  /// CHECK (semester BETWEEN 1 AND 8)
+  semester               Int?
+  lecture_hours          Int?              @default(0)
+  tutorial_hours         Int?              @default(0)
+  practical_hours        Int?              @default(0)
+  /// GENERATED ALWAYS AS (lecture_hours + tutorial_hours + (practical_hours / 2)) STORED — read-only, do not write directly
+  credits                Decimal?          @default(dbgenerated("(((lecture_hours + tutorial_hours))::numeric + ((practical_hours)::numeric / (2)::numeric))")) @db.Decimal(5, 2)
+  ca_marks               Int?              @default(40)
+  ese_marks              Int?              @default(60)
+  /// GENERATED ALWAYS AS (ca_marks + ese_marks) STORED — read-only, do not write directly
+  total_marks            Int?              @default(dbgenerated("(ca_marks + ese_marks)"))
+  /// CHECK (category IN ('BS','HS','ES','PC','PE','OE','EEC','MC'))
+  category               String?           @db.VarChar(10)
+  introduction           String?
+  total_lecture_periods  Int?
+  total_tutorial_periods Int?
+  created_at             DateTime?         @default(now()) @db.Timestamp(6)
+  updated_at             DateTime?         @default(now()) @db.Timestamp(6)
+  course_outcomes        course_outcomes[]
+  department             departments?      @relation(fields: [department_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  syllabus_units         syllabus_units[]
+  tasks                  tasks[]
+  textbooks              textbooks[]
+
+  @@index([department_id], map: "idx_courses_department")
+  @@index([semester], map: "idx_courses_semester")
+}
+
+model syllabus_units {
+  id          String    @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  course_id   String?   @db.Uuid
+  unit_number Int
+  unit_title  String?   @db.VarChar(500)
+  content     String
+  hours       Int?
+  created_at  DateTime? @default(now()) @db.Timestamp(6)
+  course      courses?  @relation(fields: [course_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+}
+
+model textbooks {
+  id                  String    @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  course_id           String?   @db.Uuid
+  /// CHECK (book_type IN ('textbook','reference'))
+  book_type           String?   @db.VarChar(20)
+  sequence_number     Int
+  authors             Json
+  title               String
+  edition             String?   @db.VarChar(100)
+  publisher           String    @db.VarChar(255)
+  place               String?   @db.VarChar(255)
+  year                Int
+  formatted_reference String?
+  created_at          DateTime? @default(now()) @db.Timestamp(6)
+  course              courses?  @relation(fields: [course_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([course_id], map: "idx_textbooks_course")
+}
+
+model course_outcomes {
+  id              String   @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  course_id       String?  @db.Uuid
+  co_number       String   @db.VarChar(10)
+  description     String
+  blooms_level    String?  @db.VarChar(10)
+  sequence_number Int
+  course          courses? @relation(fields: [course_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+}
+
+model tasks {
+  id               String       @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  course_id        String?      @db.Uuid
+  department_id    String?      @db.Uuid
+  assigned_to      String?      @db.Uuid
+  assigned_by      String?      @db.Uuid
+  /// CHECK (status IN ('assigned','in_progress','submitted','approved','rejected'))
+  status           String?      @default("assigned") @db.VarChar(20)
+  deadline         DateTime?    @db.Date
+  access_token     String?      @unique(map: "idx_tasks_access_token") @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  revision_notes   String?
+  submitted_at     DateTime?    @db.Timestamp(6)
+  approved_at      DateTime?    @db.Timestamp(6)
+  approved_by      String?      @db.VarChar(255)
+  created_at       DateTime?    @default(now()) @db.Timestamp(6)
+  updated_at       DateTime?    @default(now()) @db.Timestamp(6)
+  assigned_by_user users?       @relation("TaskAssignedBy", fields: [assigned_by], references: [id], onUpdate: NoAction)
+  assigned_to_user users?       @relation("TaskAssignedTo", fields: [assigned_to], references: [id], onUpdate: NoAction)
+  course           courses?     @relation(fields: [course_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  department       departments? @relation(fields: [department_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([department_id], map: "idx_tasks_department")
+  @@index([assigned_to], map: "idx_tasks_assigned_to")
+  @@index([status], map: "idx_tasks_status")
+}
+
+model audit_logs {
+  id         String    @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  table_name String?   @db.VarChar(100)
+  record_id  String?   @db.Uuid
+  action     String?   @db.VarChar(50)
+  changed_by String?   @db.Uuid
+  changes    Json?
+  created_at DateTime? @default(now()) @db.Timestamp(6)
+  user       users?    @relation(fields: [changed_by], references: [id], onDelete: NoAction, onUpdate: NoAction)
+}
