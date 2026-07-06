@@ -8,6 +8,8 @@ import Button from '../components/ui/Button';
 import Spinner from '../components/ui/Spinner';
 import EmptyState from '../components/ui/EmptyState';
 import DepartmentStatusBadge from '../components/DepartmentStatusBadge';
+import Badge from '../components/ui/Badge';
+import DownloadCenter from '../components/DownloadCenter';
 
 const inputClass =
   'w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500';
@@ -19,7 +21,96 @@ const NAV_ITEMS = [
   { key: 'departments', label: 'Departments' },
   { key: 'users', label: 'Users' },
   { key: 'courses', label: 'Courses' },
+  { key: 'downloads', label: 'Downloads' },
 ];
+
+function DepartmentAccordionRow({ department }) {
+  const { token } = useAuth();
+  const toast = useToast();
+  const [expanded, setExpanded] = useState(false);
+  const [detail, setDetail] = useState(null);
+  const [loadingDetail, setLoadingDetail] = useState(false);
+
+  async function toggle() {
+    const next = !expanded;
+    setExpanded(next);
+    if (next && !detail) {
+      setLoadingDetail(true);
+      try {
+        const data = await api.admin.departmentCourses(token, department.id);
+        setDetail(data);
+      } catch (err) {
+        toast.error(err.message);
+      } finally {
+        setLoadingDetail(false);
+      }
+    }
+  }
+
+  return (
+    <div className="border border-slate-200 rounded-md overflow-hidden">
+      <button
+        type="button"
+        onClick={toggle}
+        className="w-full flex items-center justify-between gap-4 px-4 py-3 bg-white hover:bg-slate-50 transition text-left"
+      >
+        <div className="flex items-center gap-3 min-w-0">
+          <svg
+            viewBox="0 0 20 20"
+            fill="currentColor"
+            className={`h-4 w-4 shrink-0 text-slate-400 transition-transform ${expanded ? 'rotate-90' : ''}`}
+          >
+            <path d="M7 5l6 5-6 5V5z" />
+          </svg>
+          <div className="min-w-0">
+            <p className="font-medium text-slate-900 truncate">{department.name}</p>
+            <p className="text-xs text-slate-500">{department.code}</p>
+          </div>
+        </div>
+        <div className="flex items-center gap-4 shrink-0">
+          <span className="text-sm text-slate-500">{department.totalCourses} courses</span>
+          <DepartmentStatusBadge status={department.status} />
+        </div>
+      </button>
+
+      {expanded && (
+        <div className="border-t border-slate-200 bg-slate-50 px-4 py-4 space-y-5">
+          {loadingDetail ? (
+            <div className="flex items-center gap-2 text-slate-500 text-sm py-4">
+              <Spinner /> Loading courses…
+            </div>
+          ) : (
+            detail?.semesters.map((sem) => (
+              <div key={sem.semester}>
+                <h4 className="text-sm font-semibold text-slate-700 mb-2">Semester {sem.semester}</h4>
+                {sem.courses.length === 0 ? (
+                  <p className="text-sm text-slate-400 italic">No courses assigned.</p>
+                ) : (
+                  <div className="space-y-2">
+                    {sem.courses.map((c) => (
+                      <div
+                        key={c.id}
+                        className="flex items-center justify-between gap-3 bg-white rounded-md border border-slate-200 px-3 py-2"
+                      >
+                        <div className="min-w-0">
+                          <p className="text-sm font-medium text-slate-900">
+                            {c.courseCode} — {c.courseTitle}
+                          </p>
+                          <p className="text-xs text-slate-500">{c.faculty || 'No faculty assigned'}</p>
+                        </div>
+                        <Badge status={c.status} />
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            ))
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
 
 function OverviewTab({ departments, loading }) {
   if (loading) {
@@ -44,29 +135,12 @@ function OverviewTab({ departments, loading }) {
   }
 
   return (
-    <Card title="Departments" description="Live approval status across every department.">
-      <table className="w-full text-sm">
-        <thead>
-          <tr className="text-left text-slate-500 border-b border-slate-200">
-            <th className="py-2">Name</th>
-            <th className="py-2">Code</th>
-            <th className="py-2">Courses</th>
-            <th className="py-2">Status</th>
-          </tr>
-        </thead>
-        <tbody>
-          {departments.map((d) => (
-            <tr key={d.id} className="border-b border-slate-100">
-              <td className="py-2">{d.name}</td>
-              <td className="py-2">{d.code}</td>
-              <td className="py-2">{d.totalCourses}</td>
-              <td className="py-2">
-                <DepartmentStatusBadge status={d.status} />
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
+    <Card title="Departments" description="Expand a department to see its full semester-by-semester curriculum status.">
+      <div className="space-y-3">
+        {departments.map((d) => (
+          <DepartmentAccordionRow key={d.id} department={d} />
+        ))}
+      </div>
     </Card>
   );
 }
@@ -209,6 +283,7 @@ function CoursesTab({ departments, onCreated }) {
     caMarks: 40,
     eseMarks: 60,
     category: 'PC',
+    commonTo: '',
   });
 
   async function handleCreateCourse(e) {
@@ -242,6 +317,12 @@ function CoursesTab({ departments, onCreated }) {
           value={courseForm.courseTitle}
           onChange={(e) => setCourseForm({ ...courseForm, courseTitle: e.target.value })}
         />
+        <input
+          className={inputClass}
+          placeholder="Common To (e.g. Common to CSE and AI&DS) — optional"
+          value={courseForm.commonTo}
+          onChange={(e) => setCourseForm({ ...courseForm, commonTo: e.target.value })}
+        />
         <select
           className={inputClass}
           required
@@ -252,6 +333,18 @@ function CoursesTab({ departments, onCreated }) {
           {departments.map((d) => (
             <option key={d.id} value={d.id}>
               {d.name}
+            </option>
+          ))}
+        </select>
+        <select
+          className={inputClass}
+          required
+          value={courseForm.semester}
+          onChange={(e) => setCourseForm({ ...courseForm, semester: Number(e.target.value) })}
+        >
+          {[1, 2, 3, 4, 5, 6, 7, 8].map((s) => (
+            <option key={s} value={s}>
+              Semester {s}
             </option>
           ))}
         </select>
@@ -328,6 +421,7 @@ export default function TopAdminDashboard() {
         {activeTab === 'departments' && <DepartmentsTab onCreated={loadDashboard} />}
         {activeTab === 'users' && <UsersTab departments={departments} />}
         {activeTab === 'courses' && <CoursesTab departments={departments} onCreated={loadDashboard} />}
+        {activeTab === 'downloads' && <DownloadCenter />}
       </div>
     </AppShell>
   );

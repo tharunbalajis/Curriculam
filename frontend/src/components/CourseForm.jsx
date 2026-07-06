@@ -22,11 +22,15 @@ function calculatePeriods(credits, unitCount = 5) {
 }
 
 const CATEGORIES = ['BS', 'HS', 'ES', 'PC', 'PE', 'OE', 'EEC', 'MC'];
+const PO_PSO_KEYS = ['PO1', 'PO2', 'PO3', 'PO4', 'PO5', 'PO6', 'PO7', 'PO8', 'PO9', 'PO10', 'PO11', 'PSO1', 'PSO2'];
 
-function Field({ label, children }) {
+function Field({ label, required = false, children }) {
   return (
     <label className="block">
-      <span className="block text-sm font-medium text-slate-700 mb-1">{label}</span>
+      <span className="block text-sm font-medium text-slate-700 mb-1">
+        {label}
+        {required && <span className="text-red-500"> *</span>}
+      </span>
       {children}
     </label>
   );
@@ -34,6 +38,125 @@ function Field({ label, children }) {
 
 const inputClass =
   'w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-slate-100 disabled:text-slate-500';
+
+// Textbooks and references live in the same underlying `textbooks` array
+// (the DB table distinguishes them with a `book_type` column — that's the
+// given schema, not something worth adding a second table for) but they are
+// always authored, numbered, and displayed as two fully separate lists so
+// they never visually or logically merge.
+function renumberBookEntries(items) {
+  let textbookCount = 0;
+  let referenceCount = 0;
+  return items.map((item) => {
+    if (item.bookType === 'reference') {
+      referenceCount += 1;
+      return { ...item, sequenceNumber: referenceCount };
+    }
+    textbookCount += 1;
+    return { ...item, sequenceNumber: textbookCount };
+  });
+}
+
+function BookEntryCard({ label, book, onUpdate, onRemove, readOnly }) {
+  return (
+    <div className="border border-slate-200 rounded-md p-4 space-y-3 bg-white shadow-sm animate-fade-in">
+      <div className="flex items-center justify-between">
+        <span className="text-xs font-semibold text-slate-500 uppercase tracking-wide">{label}</span>
+        {!readOnly && (
+          <button type="button" className="text-sm text-red-600 hover:underline" onClick={onRemove}>
+            Remove
+          </button>
+        )}
+      </div>
+      <Field label="Author(s) (comma-separated)">
+        <input
+          className={inputClass}
+          value={(book.authors || []).join(', ')}
+          disabled={readOnly}
+          onChange={(e) =>
+            onUpdate({ authors: e.target.value.split(',').map((a) => a.trim()).filter(Boolean) })
+          }
+        />
+      </Field>
+      <Field label="Title" required>
+        <input
+          className={inputClass}
+          value={book.title || ''}
+          disabled={readOnly}
+          onChange={(e) => onUpdate({ title: e.target.value })}
+        />
+      </Field>
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+        <Field label="Edition">
+          <input
+            className={inputClass}
+            value={book.edition || ''}
+            disabled={readOnly}
+            onChange={(e) => onUpdate({ edition: e.target.value })}
+          />
+        </Field>
+        <Field label="Publisher">
+          <input
+            className={inputClass}
+            value={book.publisher || ''}
+            disabled={readOnly}
+            onChange={(e) => onUpdate({ publisher: e.target.value })}
+          />
+        </Field>
+        <Field label="Place">
+          <input
+            className={inputClass}
+            value={book.place || ''}
+            disabled={readOnly}
+            onChange={(e) => onUpdate({ place: e.target.value })}
+          />
+        </Field>
+        <Field label="Year">
+          <input
+            type="number"
+            className={inputClass}
+            value={book.year ?? ''}
+            disabled={readOnly}
+            onChange={(e) => onUpdate({ year: Number(e.target.value) })}
+          />
+        </Field>
+      </div>
+    </div>
+  );
+}
+
+function BookEntrySection({ title, bookType, entries, onAdd, onUpdate, onRemove, readOnly, emptyLabel }) {
+  const scrollable = entries.length > 3 ? 'max-h-[32rem] overflow-y-auto pr-1' : '';
+
+  return (
+    <section>
+      <div className="flex items-center justify-between mb-3">
+        <h3 className="text-base font-semibold text-slate-800 uppercase tracking-wide">{title}</h3>
+        {!readOnly && (
+          <button type="button" className="text-sm text-blue-600 hover:underline" onClick={() => onAdd(bookType)}>
+            + Add {bookType === 'reference' ? 'Reference' : 'Textbook'}
+          </button>
+        )}
+      </div>
+      {entries.length === 0 ? (
+        <p className="text-sm text-slate-400 italic">{emptyLabel}</p>
+      ) : (
+        <div className={`space-y-4 ${scrollable}`}>
+          {entries.map((entry, i) => (
+            <BookEntryCard
+              key={entry._idx}
+              label={`${bookType === 'reference' ? 'Reference' : 'Textbook'} ${i + 1}`}
+              book={entry}
+              readOnly={readOnly}
+              onUpdate={(updates) => onUpdate(entry._idx, updates)}
+              onRemove={() => onRemove(entry._idx)}
+            />
+          ))}
+        </div>
+      )}
+    </section>
+  );
+}
 
 export default function CourseForm({ course, onChange, disabledFields = [], readOnly = false }) {
   const isDisabled = (field) => readOnly || disabledFields.includes(field);
@@ -58,10 +181,34 @@ export default function CourseForm({ course, onChange, disabledFields = [], read
     onChange({ ...course, [field]: items });
   }
 
+  function addBookEntry(bookType) {
+    const items = [
+      ...(course.textbooks || []),
+      { bookType, authors: [], title: '', edition: '', publisher: '', place: '', year: new Date().getFullYear() },
+    ];
+    onChange({ ...course, textbooks: renumberBookEntries(items) });
+  }
+
+  function updateBookEntry(idx, updates) {
+    const items = [...(course.textbooks || [])];
+    items[idx] = { ...items[idx], ...updates };
+    onChange({ ...course, textbooks: renumberBookEntries(items) });
+  }
+
+  function removeBookEntry(idx) {
+    const items = [...(course.textbooks || [])];
+    items.splice(idx, 1);
+    onChange({ ...course, textbooks: renumberBookEntries(items) });
+  }
+
   const credits = computeCredits(course.lectureHours, course.tutorialHours, course.practicalHours);
   const totalMarks = computeTotalMarks(course.caMarks, course.eseMarks);
   const unitCount = course.syllabusUnits?.length || 5;
   const { totalPeriods, periodsPerUnit } = calculatePeriods(credits, unitCount);
+
+  const allBookEntries = (course.textbooks || []).map((t, idx) => ({ ...t, _idx: idx }));
+  const textbookEntries = allBookEntries.filter((t) => t.bookType !== 'reference');
+  const referenceEntries = allBookEntries.filter((t) => t.bookType === 'reference');
 
   return (
     <div className="space-y-8">
@@ -115,6 +262,27 @@ export default function CourseForm({ course, onChange, disabledFields = [], read
               </option>
             ))}
           </select>
+        </Field>
+        <Field label="Common To (departments)">
+          <input
+            className={inputClass}
+            placeholder="e.g. Common to CSE and AI&DS"
+            value={course.commonTo || ''}
+            disabled={isDisabled('commonTo')}
+            onChange={(e) => set('commonTo', e.target.value)}
+          />
+        </Field>
+      </section>
+
+      <section>
+        <Field label="Prerequisites">
+          <textarea
+            rows={2}
+            className={inputClass}
+            value={course.prerequisites || ''}
+            disabled={isDisabled('prerequisites')}
+            onChange={(e) => set('prerequisites', e.target.value)}
+          />
         </Field>
       </section>
 
@@ -241,9 +409,9 @@ export default function CourseForm({ course, onChange, disabledFields = [], read
             </button>
           )}
         </div>
-        <div className="space-y-4">
+        <div className={`space-y-4 ${(course.syllabusUnits || []).length > 3 ? 'max-h-[32rem] overflow-y-auto pr-1' : ''}`}>
           {(course.syllabusUnits || []).map((unit, idx) => (
-            <div key={idx} className="border border-slate-200 rounded-md p-4 space-y-3">
+            <div key={idx} className="border border-slate-200 rounded-md p-4 space-y-3 bg-white shadow-sm animate-fade-in">
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
                 <Field label="Unit #">
                   <input
@@ -283,7 +451,7 @@ export default function CourseForm({ course, onChange, disabledFields = [], read
                   </div>
                 )}
               </div>
-              <Field label="Content">
+              <Field label="Content" required>
                 <textarea
                   rows={2}
                   className={inputClass}
@@ -300,125 +468,27 @@ export default function CourseForm({ course, onChange, disabledFields = [], read
         </p>
       </section>
 
-      <section>
-        <div className="flex items-center justify-between mb-3">
-          <h3 className="text-base font-semibold text-slate-800">Textbooks &amp; References</h3>
-          {!readOnly && (
-            <button
-              type="button"
-              className="text-sm text-blue-600 hover:underline"
-              onClick={() =>
-                addArrayItem('textbooks', {
-                  bookType: 'textbook',
-                  sequenceNumber: (course.textbooks?.length || 0) + 1,
-                  authors: [],
-                  title: '',
-                  edition: '',
-                  publisher: '',
-                  place: '',
-                  year: new Date().getFullYear(),
-                })
-              }
-            >
-              + Add textbook / reference
-            </button>
-          )}
-        </div>
-        <div className="space-y-4">
-          {(course.textbooks || []).map((book, idx) => (
-            <div key={idx} className="border border-slate-200 rounded-md p-4 space-y-3">
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-                <Field label="Type">
-                  <select
-                    className={inputClass}
-                    value={book.bookType || 'textbook'}
-                    disabled={readOnly}
-                    onChange={(e) => setArrayItem('textbooks', idx, { bookType: e.target.value })}
-                  >
-                    <option value="textbook">Textbook</option>
-                    <option value="reference">Reference</option>
-                  </select>
-                </Field>
-                <Field label="Sequence #">
-                  <input
-                    type="number"
-                    className={inputClass}
-                    value={book.sequenceNumber ?? ''}
-                    disabled={readOnly}
-                    onChange={(e) => setArrayItem('textbooks', idx, { sequenceNumber: Number(e.target.value) })}
-                  />
-                </Field>
-                <Field label="Year">
-                  <input
-                    type="number"
-                    className={inputClass}
-                    value={book.year ?? ''}
-                    disabled={readOnly}
-                    onChange={(e) => setArrayItem('textbooks', idx, { year: Number(e.target.value) })}
-                  />
-                </Field>
-                {!readOnly && (
-                  <div className="flex items-end">
-                    <button
-                      type="button"
-                      className="text-sm text-red-600 hover:underline"
-                      onClick={() => removeArrayItem('textbooks', idx)}
-                    >
-                      Remove
-                    </button>
-                  </div>
-                )}
-              </div>
-              <Field label="Authors (comma-separated)">
-                <input
-                  className={inputClass}
-                  value={(book.authors || []).join(', ')}
-                  disabled={readOnly}
-                  onChange={(e) =>
-                    setArrayItem('textbooks', idx, {
-                      authors: e.target.value.split(',').map((a) => a.trim()).filter(Boolean),
-                    })
-                  }
-                />
-              </Field>
-              <Field label="Title">
-                <input
-                  className={inputClass}
-                  value={book.title || ''}
-                  disabled={readOnly}
-                  onChange={(e) => setArrayItem('textbooks', idx, { title: e.target.value })}
-                />
-              </Field>
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                <Field label="Edition">
-                  <input
-                    className={inputClass}
-                    value={book.edition || ''}
-                    disabled={readOnly}
-                    onChange={(e) => setArrayItem('textbooks', idx, { edition: e.target.value })}
-                  />
-                </Field>
-                <Field label="Publisher">
-                  <input
-                    className={inputClass}
-                    value={book.publisher || ''}
-                    disabled={readOnly}
-                    onChange={(e) => setArrayItem('textbooks', idx, { publisher: e.target.value })}
-                  />
-                </Field>
-                <Field label="Place">
-                  <input
-                    className={inputClass}
-                    value={book.place || ''}
-                    disabled={readOnly}
-                    onChange={(e) => setArrayItem('textbooks', idx, { place: e.target.value })}
-                  />
-                </Field>
-              </div>
-            </div>
-          ))}
-        </div>
-      </section>
+      <BookEntrySection
+        title="Text Books"
+        bookType="textbook"
+        entries={textbookEntries}
+        onAdd={addBookEntry}
+        onUpdate={updateBookEntry}
+        onRemove={removeBookEntry}
+        readOnly={readOnly}
+        emptyLabel="No textbooks added yet."
+      />
+
+      <BookEntrySection
+        title="References"
+        bookType="reference"
+        entries={referenceEntries}
+        onAdd={addBookEntry}
+        onUpdate={updateBookEntry}
+        onRemove={removeBookEntry}
+        readOnly={readOnly}
+        emptyLabel="No references added yet."
+      />
 
       <section>
         <div className="flex items-center justify-between mb-3">
@@ -440,9 +510,9 @@ export default function CourseForm({ course, onChange, disabledFields = [], read
             </button>
           )}
         </div>
-        <div className="space-y-4">
+        <div className={`space-y-4 ${(course.courseOutcomes || []).length > 3 ? 'max-h-[32rem] overflow-y-auto pr-1' : ''}`}>
           {(course.courseOutcomes || []).map((outcome, idx) => (
-            <div key={idx} className="border border-slate-200 rounded-md p-4 space-y-3">
+            <div key={idx} className="border border-slate-200 rounded-md p-4 space-y-3 bg-white shadow-sm animate-fade-in">
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
                 <Field label="CO Number">
                   <input
@@ -481,7 +551,7 @@ export default function CourseForm({ course, onChange, disabledFields = [], read
                   </div>
                 )}
               </div>
-              <Field label="Description">
+              <Field label="Description" required>
                 <textarea
                   rows={2}
                   className={inputClass}
@@ -490,6 +560,36 @@ export default function CourseForm({ course, onChange, disabledFields = [], read
                   onChange={(e) => setArrayItem('courseOutcomes', idx, { description: e.target.value })}
                 />
               </Field>
+              <div>
+                <span className="block text-sm font-medium text-slate-700 mb-1">
+                  PO / PSO Mapping (1-low, 2-medium, 3-high)
+                </span>
+                <div className="grid grid-cols-4 sm:grid-cols-7 gap-2">
+                  {PO_PSO_KEYS.map((key) => (
+                    <label key={key} className="block">
+                      <span className="block text-xs text-slate-500 mb-0.5">{key}</span>
+                      <select
+                        className={inputClass}
+                        value={outcome.poMapping?.[key] ?? ''}
+                        disabled={readOnly}
+                        onChange={(e) =>
+                          setArrayItem('courseOutcomes', idx, {
+                            poMapping: {
+                              ...outcome.poMapping,
+                              [key]: e.target.value ? Number(e.target.value) : null,
+                            },
+                          })
+                        }
+                      >
+                        <option value="">-</option>
+                        <option value="1">1</option>
+                        <option value="2">2</option>
+                        <option value="3">3</option>
+                      </select>
+                    </label>
+                  ))}
+                </div>
+              </div>
             </div>
           ))}
         </div>

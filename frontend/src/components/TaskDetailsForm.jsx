@@ -27,7 +27,7 @@ export default function TaskDetailsForm({ taskMeta, course, onCourseChange, onSu
           <CourseForm
             course={course}
             onChange={onCourseChange}
-            disabledFields={['courseCode', 'courseTitle']}
+            disabledFields={['courseCode', 'courseTitle', 'commonTo']}
             readOnly={readOnly}
           />
 

@@ -20,6 +20,8 @@ export default function TaskReview() {
   const [error, setError] = useState('');
   const [rejecting, setRejecting] = useState(false);
   const [revisionNotes, setRevisionNotes] = useState('');
+  const [approving, setApproving] = useState(false);
+  const [rejectSubmitting, setRejectSubmitting] = useState(false);
 
   async function load() {
     setLoading(true);
@@ -39,24 +41,30 @@ export default function TaskReview() {
   }, [accessToken]);
 
   async function handleApprove() {
+    setApproving(true);
     try {
       await api.tasks.approveByAccessToken(token, accessToken);
-      toast.success('Approved.');
+      toast.success('Course Approved Successfully');
       load();
     } catch (err) {
       toast.error(err.message);
+    } finally {
+      setApproving(false);
     }
   }
 
   async function handleReject() {
+    setRejectSubmitting(true);
     try {
       await api.tasks.rejectByAccessToken(token, accessToken, revisionNotes);
-      toast.success('Sent back for revision.');
+      toast.success('Course Rejected Successfully');
       setRejecting(false);
       setRevisionNotes('');
       load();
     } catch (err) {
       toast.error(err.message);
+    } finally {
+      setRejectSubmitting(false);
     }
   }
 
@@ -89,7 +97,8 @@ export default function TaskReview() {
           <div>
             <h1 className="text-lg font-bold text-slate-900">Review Submission</h1>
             <p className="text-sm text-slate-500">
-              {task.course?.courseCode} — {task.course?.courseTitle} · Submitted by {task.faculty?.name}
+              {task.course?.courseCode} — {task.course?.courseTitle} (Sem {task.course?.semester}) · Submitted by{' '}
+              {task.faculty?.name}
             </p>
           </div>
         </div>
@@ -109,10 +118,14 @@ export default function TaskReview() {
         {canDecide && (
           <Card className="space-y-3">
             <div className="flex gap-3">
-              <Button variant="success" onClick={handleApprove}>
+              <Button variant="success" loading={approving} disabled={rejectSubmitting} onClick={handleApprove}>
                 Approve
               </Button>
-              <Button variant="danger" onClick={() => setRejecting(!rejecting)}>
+              <Button
+                variant="danger"
+                disabled={approving}
+                onClick={() => setRejecting(!rejecting)}
+              >
                 Reject
               </Button>
             </div>
@@ -124,7 +137,13 @@ export default function TaskReview() {
                   value={revisionNotes}
                   onChange={(e) => setRevisionNotes(e.target.value)}
                 />
-                <Button variant="secondary" className="whitespace-nowrap" onClick={handleReject}>
+                <Button
+                  variant="secondary"
+                  className="whitespace-nowrap"
+                  loading={rejectSubmitting}
+                  disabled={!revisionNotes.trim()}
+                  onClick={handleReject}
+                >
                   Confirm Reject
                 </Button>
               </div>

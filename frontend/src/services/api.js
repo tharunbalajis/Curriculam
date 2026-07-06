@@ -10,7 +10,12 @@ async function request(path, { method = 'GET', token, body, params } = {}) {
     if (query) url += `?${query}`;
   }
 
-  const headers = { 'Content-Type': 'application/json' };
+  // Only set Content-Type when an actual body is being sent — Fastify's
+  // JSON body parser rejects a request that declares application/json but
+  // sends no body at all (FST_ERR_CTP_EMPTY_JSON_BODY), which is exactly
+  // what a bodyless action like approve() was triggering.
+  const headers = {};
+  if (body !== undefined) headers['Content-Type'] = 'application/json';
   if (token) headers.Authorization = `Bearer ${token}`;
 
   const res = await fetch(url, {
@@ -85,11 +90,48 @@ export const api = {
 
   admin: {
     dashboard: (token) => request('/admin/dashboard', { token }),
+    departmentCourses: (token, departmentId) => request(`/admin/departments/${departmentId}/courses`, { token }),
     tasks: (token, params) => request('/admin/tasks', { token, params }),
     reassignTask: (token, id, data) => request(`/admin/tasks/${id}/reassign`, { method: 'POST', token, body: data }),
     forceApprove: (token, id) => request(`/admin/tasks/${id}/approve`, { method: 'POST', token }),
     forceReject: (token, id, revisionNotes) =>
       request(`/admin/tasks/${id}/reject`, { method: 'POST', token, body: { revisionNotes } }),
+  },
+
+  downloads: {
+    courses: (token, params) => request('/downloads/courses', { token, params }),
+    history: (token) => request('/downloads/history', { token }),
+    // Binary response (docx/pdf), not JSON — bypasses the shared `request()`
+    // helper and triggers a normal browser file-save via a temporary link.
+    export: async (token, body) => {
+      const res = await fetch(`${API_URL}/downloads/export`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify(body),
+      });
+
+      if (!res.ok) {
+        const data = await res.json().catch(() => null);
+        const message = data?.message || `Export failed with status ${res.status}`;
+        const error = new Error(message);
+        error.status = res.status;
+        throw error;
+      }
+
+      const disposition = res.headers.get('content-disposition') || '';
+      const match = disposition.match(/filename="([^"]+)"/);
+      const fileName = match ? match[1] : `export.${body.format}`;
+      const blob = await res.blob();
+
+      const url = window.URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = fileName;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.URL.revokeObjectURL(url);
+    },
   },
 };
 

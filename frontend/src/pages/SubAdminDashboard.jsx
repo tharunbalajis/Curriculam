@@ -8,6 +8,7 @@ import Button from '../components/ui/Button';
 import Badge from '../components/ui/Badge';
 import Spinner from '../components/ui/Spinner';
 import EmptyState from '../components/ui/EmptyState';
+import DownloadCenter from '../components/DownloadCenter';
 
 const inputClass =
   'w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500';
@@ -16,6 +17,7 @@ const NAV_ITEMS = [
   { key: 'department', label: 'My Department' },
   { key: 'assign', label: 'Assign Task' },
   { key: 'review', label: 'Review Submissions' },
+  { key: 'downloads', label: 'Downloads' },
 ];
 
 function MyDepartmentTab({ user, tasks, loading }) {
@@ -93,7 +95,7 @@ function AssignTaskTab({ faculty, courses, onAssigned }) {
               <option value="">Select unassigned course</option>
               {courses.map((c) => (
                 <option key={c.id} value={c.id}>
-                  {c.courseCode} — {c.courseTitle}
+                  {c.courseCode} — {c.courseTitle} (Sem {c.semester})
                 </option>
               ))}
             </select>
@@ -138,26 +140,33 @@ function ReviewSubmissionsTab({ tasks, loading, onChanged }) {
   const toast = useToast();
   const [rejectingId, setRejectingId] = useState(null);
   const [revisionNotes, setRevisionNotes] = useState('');
+  const [pendingActionId, setPendingActionId] = useState(null);
 
   async function handleApprove(id) {
+    setPendingActionId(id);
     try {
       await api.tasks.approve(token, id);
-      toast.success('Task approved.');
+      toast.success('Course Approved Successfully');
       onChanged();
     } catch (err) {
       toast.error(err.message);
+    } finally {
+      setPendingActionId(null);
     }
   }
 
   async function submitReject(id) {
+    setPendingActionId(id);
     try {
       await api.tasks.reject(token, id, revisionNotes);
       setRejectingId(null);
       setRevisionNotes('');
-      toast.success('Sent back for revision.');
+      toast.success('Course Rejected Successfully');
       onChanged();
     } catch (err) {
       toast.error(err.message);
+    } finally {
+      setPendingActionId(null);
     }
   }
 
@@ -185,6 +194,7 @@ function ReviewSubmissionsTab({ tasks, loading, onChanged }) {
               <tr key={t.id} className="border-b border-slate-100 align-top">
                 <td className="py-3">
                   {t.course?.courseCode} — {t.course?.courseTitle}
+                  <span className="text-slate-400"> · Sem {t.course?.semester}</span>
                 </td>
                 <td className="py-3">{t.faculty?.name}</td>
                 <td className="py-3">{t.deadline ? new Date(t.deadline).toLocaleDateString() : '—'}</td>
@@ -195,12 +205,19 @@ function ReviewSubmissionsTab({ tasks, loading, onChanged }) {
                   {t.status === 'submitted' && (
                     <div className="space-y-2">
                       <div className="flex gap-2">
-                        <Button variant="success" size="sm" onClick={() => handleApprove(t.id)}>
+                        <Button
+                          variant="success"
+                          size="sm"
+                          loading={pendingActionId === t.id}
+                          disabled={pendingActionId !== null}
+                          onClick={() => handleApprove(t.id)}
+                        >
                           Approve
                         </Button>
                         <Button
                           variant="danger"
                           size="sm"
+                          disabled={pendingActionId !== null}
                           onClick={() => setRejectingId(rejectingId === t.id ? null : t.id)}
                         >
                           Reject
@@ -214,7 +231,14 @@ function ReviewSubmissionsTab({ tasks, loading, onChanged }) {
                             value={revisionNotes}
                             onChange={(e) => setRevisionNotes(e.target.value)}
                           />
-                          <Button variant="secondary" size="sm" className="whitespace-nowrap" onClick={() => submitReject(t.id)}>
+                          <Button
+                            variant="secondary"
+                            size="sm"
+                            className="whitespace-nowrap"
+                            loading={pendingActionId === t.id}
+                            disabled={!revisionNotes.trim()}
+                            onClick={() => submitReject(t.id)}
+                          >
                             Confirm
                           </Button>
                         </div>
@@ -269,6 +293,7 @@ export default function SubAdminDashboard() {
         {activeTab === 'department' && <MyDepartmentTab user={user} tasks={tasks} loading={loading} />}
         {activeTab === 'assign' && <AssignTaskTab faculty={faculty} courses={courses} onAssigned={loadAll} />}
         {activeTab === 'review' && <ReviewSubmissionsTab tasks={tasks} loading={loading} onChanged={loadAll} />}
+        {activeTab === 'downloads' && <DownloadCenter />}
       </div>
     </AppShell>
   );

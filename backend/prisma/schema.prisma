@@ -8,29 +8,31 @@ datasource db {
 }
 
 model departments {
-  id         String    @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
-  name       String    @db.VarChar(255)
-  code       String    @unique @db.VarChar(10)
-  created_at DateTime? @default(now()) @db.Timestamp(6)
-  courses    courses[]
-  tasks      tasks[]
-  users      users[]
+  id               String             @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  name             String             @db.VarChar(255)
+  code             String             @unique @db.VarChar(10)
+  created_at       DateTime?          @default(now()) @db.Timestamp(6)
+  courses          courses[]
+  download_history download_history[]
+  tasks            tasks[]
+  users            users[]
 }
 
 model users {
-  id                String       @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
-  name              String       @db.VarChar(255)
-  email             String       @unique @db.VarChar(255)
-  password          String       @db.VarChar(255)
+  id                String             @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  name              String             @db.VarChar(255)
+  email             String             @unique @db.VarChar(255)
+  password          String             @db.VarChar(255)
   /// CHECK (role IN ('top_admin', 'sub_admin', 'faculty'))
-  role              String       @db.VarChar(20)
-  department_id     String?      @db.Uuid
-  created_at        DateTime?    @default(now()) @db.Timestamp(6)
-  updated_at        DateTime?    @default(now()) @db.Timestamp(6)
+  role              String             @db.VarChar(20)
+  department_id     String?            @db.Uuid
+  created_at        DateTime?          @default(now()) @db.Timestamp(6)
+  updated_at        DateTime?          @default(now()) @db.Timestamp(6)
   audit_logs        audit_logs[]
-  tasks_assigned_by tasks[]      @relation("TaskAssignedBy")
-  tasks_assigned_to tasks[]      @relation("TaskAssignedTo")
-  department        departments? @relation(fields: [department_id], references: [id], onUpdate: NoAction)
+  download_history  download_history[]
+  tasks_assigned_by tasks[]            @relation("TaskAssignedBy")
+  tasks_assigned_to tasks[]            @relation("TaskAssignedTo")
+  department        departments?       @relation(fields: [department_id], references: [id], onUpdate: NoAction)
 
   @@index([department_id], map: "idx_users_department")
   @@index([role], map: "idx_users_role")
@@ -60,6 +62,8 @@ model courses {
   total_tutorial_periods Int?
   created_at             DateTime?         @default(now()) @db.Timestamp(6)
   updated_at             DateTime?         @default(now()) @db.Timestamp(6)
+  common_to              String?
+  prerequisites          String?
   course_outcomes        course_outcomes[]
   department             departments?      @relation(fields: [department_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
   syllabus_units         syllabus_units[]
@@ -107,6 +111,7 @@ model course_outcomes {
   description     String
   blooms_level    String?  @db.VarChar(10)
   sequence_number Int
+  po_mapping      Json?
   course          courses? @relation(fields: [course_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
 }
 
@@ -145,4 +150,21 @@ model audit_logs {
   changes    Json?
   created_at DateTime? @default(now()) @db.Timestamp(6)
   user       users?    @relation(fields: [changed_by], references: [id], onDelete: NoAction, onUpdate: NoAction)
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model download_history {
+  id            String       @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  user_id       String?      @db.Uuid
+  role          String       @db.VarChar(20)
+  department_id String?      @db.Uuid
+  filters       Json
+  export_type   String       @db.VarChar(10)
+  scope         String       @db.VarChar(30)
+  file_name     String       @db.VarChar(255)
+  created_at    DateTime?    @default(now()) @db.Timestamp(6)
+  departments   departments? @relation(fields: [department_id], references: [id], onUpdate: NoAction)
+  users         users?       @relation(fields: [user_id], references: [id], onUpdate: NoAction)
+
+  @@index([user_id], map: "idx_download_history_user")
 }

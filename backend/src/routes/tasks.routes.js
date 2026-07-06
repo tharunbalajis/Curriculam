@@ -20,6 +20,9 @@ function buildScalarCourseData(body, { includeCodeAndTitle = true } = {}) {
   if (body.introduction !== undefined) data.introduction = body.introduction;
   if (body.totalLecturePeriods !== undefined) data.total_lecture_periods = body.totalLecturePeriods;
   if (body.totalTutorialPeriods !== undefined) data.total_tutorial_periods = body.totalTutorialPeriods;
+  // Note: commonTo is identity metadata (like course_code/course_title) set
+  // by top_admin at course creation — faculty submissions never touch it.
+  if (body.prerequisites !== undefined) data.prerequisites = body.prerequisites;
 
   return data;
 }
@@ -149,6 +152,7 @@ const submitBodySchema = {
     introduction: { type: 'string' },
     totalLecturePeriods: { type: 'integer' },
     totalTutorialPeriods: { type: 'integer' },
+    prerequisites: { type: 'string' },
     ...courseChildSchema,
   },
   additionalProperties: true,

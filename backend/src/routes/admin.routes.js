@@ -1,4 +1,5 @@
 const emailService = require('../services/email.service');
+const { resolveCourseStatus } = require('../services/courseStatus.service');
 
 function sanitizeTask(task) {
   return {
@@ -41,6 +42,50 @@ async function adminRoutes(fastify, options) {
           status: allApproved ? 'green' : 'red',
         };
       });
+    },
+  });
+
+  // GET /api/admin/departments/:id/courses — semester-by-semester breakdown
+  // for the dashboard accordion. A course's displayed status collapses the
+  // 'assigned'/'in_progress' task states into 'pending' (no task at all is
+  // also 'pending') since the dashboard only distinguishes the four states
+  // the prompt asked for: pending / submitted / approved / rejected.
+  fastify.get('/departments/:id/courses', {
+    preHandler: [fastify.authenticate, fastify.authorize(['top_admin'])],
+    schema: { params: { type: 'object', required: ['id'], properties: { id: { type: 'string' } } } },
+    handler: async (request) => {
+      const department = await fastify.prisma.departments.findUnique({ where: { id: request.params.id } });
+      if (!department) throw fastify.httpErrors.notFound('Department not found');
+
+      const courses = await fastify.prisma.courses.findMany({
+        where: { department_id: request.params.id },
+        include: {
+          tasks: { include: { assigned_to_user: true }, orderBy: { created_at: 'desc' }, take: 1 },
+        },
+        orderBy: [{ semester: 'asc' }, { course_code: 'asc' }],
+      });
+
+      const semesters = Array.from({ length: 8 }, (_, i) => ({ semester: i + 1, courses: [] }));
+
+      for (const course of courses) {
+        const semesterIndex = (course.semester || 1) - 1;
+        if (semesterIndex < 0 || semesterIndex > 7) continue;
+
+        const latestTask = course.tasks[0];
+
+        semesters[semesterIndex].courses.push({
+          id: course.id,
+          courseCode: course.course_code,
+          courseTitle: course.course_title,
+          faculty: latestTask?.assigned_to_user?.name || null,
+          status: resolveCourseStatus(latestTask),
+        });
+      }
+
+      return {
+        department: { id: department.id, name: department.name, code: department.code },
+        semesters,
+      };
     },
   });
 

@@ -2,6 +2,7 @@
 // Task statuses (assigned/in_progress/submitted/approved/rejected) and the
 // department overview's green/red completion status both resolve here.
 const STATUS_STYLES = {
+  pending: 'bg-slate-100 text-slate-700',
   assigned: 'bg-slate-100 text-slate-700',
   in_progress: 'bg-brand-100 text-brand-700',
   submitted: 'bg-amber-100 text-amber-800',
@@ -12,6 +13,7 @@ const STATUS_STYLES = {
 };
 
 const DOT_COLORS = {
+  pending: 'bg-slate-400',
   assigned: 'bg-slate-400',
   in_progress: 'bg-brand-500',
   submitted: 'bg-amber-500',

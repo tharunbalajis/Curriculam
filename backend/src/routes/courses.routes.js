@@ -25,6 +25,8 @@ function sanitizeCourse(course) {
     introduction: course.introduction,
     totalLecturePeriods: course.total_lecture_periods,
     totalTutorialPeriods: course.total_tutorial_periods,
+    commonTo: course.common_to,
+    prerequisites: course.prerequisites,
     syllabusUnits: (course.syllabus_units || []).map((u) => ({
       id: u.id,
       unitNumber: u.unit_number,
@@ -50,6 +52,7 @@ function sanitizeCourse(course) {
       description: o.description,
       bloomsLevel: o.blooms_level,
       sequenceNumber: o.sequence_number,
+      poMapping: o.po_mapping,
     })),
     createdAt: course.created_at,
     updatedAt: course.updated_at,
@@ -80,6 +83,8 @@ function buildScalarCourseData(body, { includeCodeAndTitle = true } = {}) {
   if (body.introduction !== undefined) data.introduction = body.introduction;
   if (body.totalLecturePeriods !== undefined) data.total_lecture_periods = body.totalLecturePeriods;
   if (body.totalTutorialPeriods !== undefined) data.total_tutorial_periods = body.totalTutorialPeriods;
+  if (body.commonTo !== undefined) data.common_to = body.commonTo;
+  if (body.prerequisites !== undefined) data.prerequisites = body.prerequisites;
 
   return data;
 }
@@ -136,6 +141,7 @@ async function replaceCourseChildren(prisma, courseId, body) {
         description: o.description,
         blooms_level: o.bloomsLevel || null,
         sequence_number: o.sequenceNumber,
+        po_mapping: o.poMapping || null,
       })),
     });
   }
@@ -182,6 +188,10 @@ const courseChildSchema = {
         description: { type: 'string' },
         bloomsLevel: { type: ['string', 'null'] },
         sequenceNumber: { type: 'integer' },
+        // Map of PO1..PO11 / PSO1..PSO2 -> 1|2|3 (or omitted/null for blank).
+        // Left as a loose object rather than fully enumerated so the PO/PSO
+        // count can change without a schema edit here.
+        poMapping: { type: ['object', 'null'] },
       },
     },
   },
@@ -246,7 +256,7 @@ async function coursesRoutes(fastify, options) {
     schema: {
       body: {
         type: 'object',
-        required: ['courseCode', 'courseTitle', 'departmentId'],
+        required: ['courseCode', 'courseTitle', 'departmentId', 'semester'],
         properties: {
           courseCode: { type: 'string', minLength: 1 },
           courseTitle: { type: 'string', minLength: 1 },
@@ -262,6 +272,8 @@ async function coursesRoutes(fastify, options) {
           introduction: { type: 'string' },
           totalLecturePeriods: { type: 'integer' },
           totalTutorialPeriods: { type: 'integer' },
+          commonTo: { type: 'string' },
+          prerequisites: { type: 'string' },
           ...courseChildSchema,
         },
       },
@@ -301,6 +313,8 @@ async function coursesRoutes(fastify, options) {
           introduction: { type: 'string' },
           totalLecturePeriods: { type: 'integer' },
           totalTutorialPeriods: { type: 'integer' },
+          commonTo: { type: 'string' },
+          prerequisites: { type: 'string' },
           ...courseChildSchema,
         },
       },

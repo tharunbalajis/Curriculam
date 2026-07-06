@@ -57,6 +57,7 @@ export default function FacultyDashboard() {
                   <div>
                     <p className="font-medium text-slate-900">{t.course?.courseCode}</p>
                     <p className="text-sm text-slate-600">{t.course?.courseTitle}</p>
+                    <p className="text-xs text-slate-400 mt-0.5">Semester {t.course?.semester}</p>
                   </div>
                   <Badge status={t.status} />
                 </div>

@@ -19,8 +19,9 @@ function formatAuthorName(fullName) {
     return `${parts[1]} ${parts[0]}`;
   }
 
-  // Default case: "Reema Thareja" -> "Thareja R."
-  const initials = rest.map((n) => `${n.charAt(0).toUpperCase()}.`).join('');
+  // Default case: "Reema Thareja" -> "Thareja R."; multiple given names get a
+  // space between initials ("T. L. Floyd"), per the university's own style.
+  const initials = rest.map((n) => `${n.charAt(0).toUpperCase()}.`).join(' ');
   return `${last} ${initials}`;
 }
 
@@ -36,19 +37,22 @@ function formatAuthors(authors) {
   return `${allButLast}, and ${last}`;
 }
 
+// Matches the university master template's citation style exactly:
+// "Author(s), 'Title'. Edition edition, Publisher, Place, Year."
+// — note the period right after the closing quote of the title (not a
+// comma), confirmed against the real master copy rather than guessed.
 function formatReference({ authors, title, edition, publisher, place, year }) {
-  const segments = [];
-
   const authorsPart = formatAuthors(authors);
-  if (authorsPart) segments.push(authorsPart);
+  const titlePart = title ? `'${title}'.` : '';
 
-  if (title) segments.push(`'${title}'`);
-  if (edition) segments.push(`${edition} edition`);
-  if (publisher) segments.push(publisher);
-  if (place) segments.push(place);
-  if (year) segments.push(String(year));
+  const tail = [];
+  if (edition) tail.push(`${edition} edition`);
+  if (publisher) tail.push(publisher);
+  if (place) tail.push(place);
+  if (year) tail.push(String(year));
+  const tailPart = tail.length ? `${tail.join(', ')}.` : '';
 
-  return `${segments.join(', ')}.`;
+  return [authorsPart ? `${authorsPart},` : '', titlePart, tailPart].filter(Boolean).join(' ');
 }
 
 module.exports = { formatReference, formatAuthors, formatAuthorName };

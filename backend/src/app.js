@@ -12,6 +12,7 @@ const departmentsRoutes = require('./routes/departments.routes');
 const coursesRoutes = require('./routes/courses.routes');
 const tasksRoutes = require('./routes/tasks.routes');
 const adminRoutes = require('./routes/admin.routes');
+const downloadsRoutes = require('./routes/downloads.routes');
 
 const envSchema = {
   type: 'object',
@@ -43,6 +44,7 @@ async function buildApp(opts = {}) {
   await fastify.register(coursesRoutes, { prefix: '/api/courses' });
   await fastify.register(tasksRoutes, { prefix: '/api/tasks' });
   await fastify.register(adminRoutes, { prefix: '/api/admin' });
+  await fastify.register(downloadsRoutes, { prefix: '/api/downloads' });
 
   fastify.get('/health', async () => ({ status: 'ok' }));
 
