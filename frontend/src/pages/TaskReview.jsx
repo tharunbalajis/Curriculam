@@ -22,6 +22,36 @@ export default function TaskReview() {
   const [revisionNotes, setRevisionNotes] = useState('');
   const [approving, setApproving] = useState(false);
   const [rejectSubmitting, setRejectSubmitting] = useState(false);
+  const [downloading, setDownloading] = useState(false);
+  const [reopening, setReopening] = useState(false);
+  const [reopenNote, setReopenNote] = useState('');
+  const [reopenSubmitting, setReopenSubmitting] = useState(false);
+
+  async function handleReopen() {
+    setReopenSubmitting(true);
+    try {
+      await api.tasks.reopenByAccessToken(token, accessToken, reopenNote.trim());
+      toast.success('Task reopened — the faculty member has been notified by email.');
+      setReopening(false);
+      setReopenNote('');
+      load();
+    } catch (err) {
+      toast.error(err.message);
+    } finally {
+      setReopenSubmitting(false);
+    }
+  }
+
+  async function handleDownloadDocx() {
+    setDownloading(true);
+    try {
+      await api.tasks.previewDocxByToken(accessToken);
+    } catch (err) {
+      toast.error(err.message);
+    } finally {
+      setDownloading(false);
+    }
+  }
 
   async function load() {
     setLoading(true);
@@ -94,12 +124,17 @@ export default function TaskReview() {
       <header className="bg-white border-b border-slate-200">
         <div className="max-w-4xl mx-auto px-6 py-4 flex items-center gap-3">
           <img src="/logo.png" alt="PSG iTech" className="h-8 w-8 object-contain" />
-          <div>
+          <div className="min-w-0">
             <h1 className="text-lg font-bold text-slate-900">Review Submission</h1>
             <p className="text-sm text-slate-500">
               {task.course?.courseCode} — {task.course?.courseTitle} (Sem {task.course?.semester}) · Submitted by{' '}
               {task.faculty?.name}
             </p>
+          </div>
+          <div className="ml-auto shrink-0">
+            <Button variant="secondary" loading={downloading} onClick={handleDownloadDocx}>
+              Download .docx
+            </Button>
           </div>
         </div>
       </header>
@@ -114,6 +149,36 @@ export default function TaskReview() {
         <Card>
           <CourseForm course={task.course} onChange={() => {}} readOnly />
         </Card>
+
+        {task.status === 'approved' && (
+          <Card className="space-y-3">
+            <p className="text-sm text-slate-600">
+              This course was approved{task.approvedBy ? ` by ${task.approvedBy}` : ''}. If something still needs
+              to change, reopen it — the faculty member regains edit access and resubmits through the normal flow.
+            </p>
+            <Button variant="secondary" disabled={reopenSubmitting} onClick={() => setReopening(!reopening)}>
+              Reopen for Edits
+            </Button>
+            {reopening && (
+              <div className="flex gap-2">
+                <input
+                  className={inputClass}
+                  placeholder="Optional note — why is this being reopened?"
+                  value={reopenNote}
+                  onChange={(e) => setReopenNote(e.target.value)}
+                />
+                <Button
+                  variant="secondary"
+                  className="whitespace-nowrap"
+                  loading={reopenSubmitting}
+                  onClick={handleReopen}
+                >
+                  Confirm Reopen
+                </Button>
+              </div>
+            )}
+          </Card>
+        )}
 
         {canDecide && (
           <Card className="space-y-3">

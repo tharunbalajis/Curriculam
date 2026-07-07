@@ -277,13 +277,27 @@ export default function CourseForm({ course, onChange, disabledFields = [], read
           </select>
         </Field>
         <Field label="Common To (departments)">
-          <input
-            className={inputClass}
-            placeholder="e.g. Common to CSE and AI&DS"
-            value={course.commonTo || ''}
-            disabled={isDisabled('commonTo')}
-            onChange={(e) => set('commonTo', e.target.value)}
-          />
+          {/* Identity metadata chosen by top_admin at creation via the
+              department picker — always read-only here. Legacy courses that
+              predate the picker fall back to their stored free text. */}
+          <div className="w-full rounded-md border border-slate-300 bg-slate-100 px-3 py-2 text-sm min-h-[2.4rem]">
+            {(course.commonToDepartments || []).length > 0 ? (
+              <span className="flex flex-wrap gap-1">
+                {course.commonToDepartments.map((d) => (
+                  <span
+                    key={d.id}
+                    className="inline-flex items-center rounded bg-blue-50 border border-blue-200 px-1.5 py-0.5 text-xs text-blue-800"
+                  >
+                    {d.code}
+                  </span>
+                ))}
+              </span>
+            ) : course.commonTo ? (
+              <span className="text-slate-700">{course.commonTo}</span>
+            ) : (
+              <span className="text-slate-400">Not common to any other department</span>
+            )}
+          </div>
         </Field>
       </section>
 

@@ -57,10 +57,20 @@ async function adminRoutes(fastify, options) {
       const department = await fastify.prisma.departments.findUnique({ where: { id: request.params.id } });
       if (!department) throw fastify.httpErrors.notFound('Department not found');
 
+      // A department's curriculum includes courses it owns (department_id)
+      // AND shared courses where it appears in course_common_departments.
+      // The owner department matches both conditions, but a single findMany
+      // with OR returns each course exactly once — no duplicate rows.
       const courses = await fastify.prisma.courses.findMany({
-        where: { department_id: request.params.id },
+        where: {
+          OR: [
+            { department_id: request.params.id },
+            { common_departments: { some: { department_id: request.params.id } } },
+          ],
+        },
         include: {
           tasks: { include: { assigned_to_user: true }, orderBy: { created_at: 'desc' }, take: 1 },
+          department: true,
         },
         orderBy: [{ semester: 'asc' }, { course_code: 'asc' }],
       });
@@ -79,6 +89,13 @@ async function adminRoutes(fastify, options) {
           courseTitle: course.course_title,
           faculty: latestTask?.assigned_to_user?.name || null,
           status: resolveCourseStatus(latestTask),
+          // Listed here via the common-to relationship, not ownership — the
+          // owning department's sub-admin is the one responsible for it.
+          shared: course.department_id !== request.params.id,
+          ownerCode: course.department?.code || null,
+          // Latest task id, used by the top-admin course detail view's
+          // "Reopen for Edits" action on approved tasks.
+          taskId: latestTask?.id || null,
         });
       }
 

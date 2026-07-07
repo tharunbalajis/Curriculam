@@ -88,4 +88,36 @@ async function sendSubmissionEmail({ to, facultyName, courseCode, link }) {
   }
 }
 
-module.exports = { sendAssignmentEmail, sendSubmissionEmail };
+async function sendReopenedEmail({ to, facultyName, courseCode, courseTitle, note, link }) {
+  const subject = `Course Reopened for Edits: ${courseCode}`;
+  const transport = getTransport();
+
+  if (!transport) {
+    console.warn('[email] SMTP not configured — skipping send, would have sent:', { to, subject });
+    return;
+  }
+
+  const html = `
+    <div style="font-family:sans-serif;max-width:560px;margin:0 auto;">
+      <h2>Course Reopened for Edits</h2>
+      <p>Hello ${facultyName},</p>
+      <p>Your approved submission for <strong>${courseCode} — ${courseTitle}</strong> has been reopened so further
+      changes can be made. Nothing was wrong with your original work — it just needs an update.</p>
+      ${note ? `<p><strong>Note from the reviewer:</strong> ${note}</p>` : ''}
+      <p style="margin:24px 0;">${wrapButton(link, 'Edit Course Details')}</p>
+      <p>If the button does not work, copy this link into your browser:<br/>${link}</p>
+    </div>`;
+
+  try {
+    await transport.sendMail({
+      from: process.env.SMTP_USER,
+      to,
+      subject,
+      html,
+    });
+  } catch (err) {
+    console.error('[email] Failed to send reopened email:', err.message);
+  }
+}
+
+module.exports = { sendAssignmentEmail, sendSubmissionEmail, sendReopenedEmail };

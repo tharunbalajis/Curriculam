@@ -39,6 +39,37 @@ async function request(path, { method = 'GET', token, body, params } = {}) {
   return data;
 }
 
+// Binary GET download (docx previews) — same blob + Content-Disposition
+// filename pattern as downloads.export below, but for simple GET endpoints.
+async function downloadFile(path, { token, fallbackName = 'download.docx' } = {}) {
+  const headers = {};
+  if (token) headers.Authorization = `Bearer ${token}`;
+
+  const res = await fetch(`${API_URL}${path}`, { headers });
+
+  if (!res.ok) {
+    const data = await res.json().catch(() => null);
+    const message = data?.message || `Download failed with status ${res.status}`;
+    const error = new Error(message);
+    error.status = res.status;
+    throw error;
+  }
+
+  const disposition = res.headers.get('content-disposition') || '';
+  const match = disposition.match(/filename="([^"]+)"/);
+  const fileName = match ? match[1] : fallbackName;
+  const blob = await res.blob();
+
+  const url = window.URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = fileName;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  window.URL.revokeObjectURL(url);
+}
+
 export const api = {
   auth: {
     login: (email, password) => request('/auth/login', { method: 'POST', body: { email, password } }),
@@ -73,6 +104,8 @@ export const api = {
     approve: (token, id) => request(`/tasks/${id}/approve`, { method: 'POST', token }),
     reject: (token, id, revisionNotes) =>
       request(`/tasks/${id}/reject`, { method: 'POST', token, body: { revisionNotes } }),
+    reopen: (token, id, note) =>
+      request(`/tasks/${id}/reopen`, { method: 'POST', token, body: { note: note || null } }),
 
     getById: (token, id) => request(`/tasks/${id}`, { token }),
     submitById: (token, id, data) => request(`/tasks/${id}`, { method: 'PUT', token, body: data }),
@@ -81,11 +114,16 @@ export const api = {
     submitByAccessToken: (accessToken, data) =>
       request(`/tasks/token/${accessToken}`, { method: 'PUT', body: data }),
 
+    previewDocxById: (token, id) => downloadFile(`/tasks/${id}/preview.docx`, { token }),
+    previewDocxByToken: (accessToken) => downloadFile(`/tasks/token/${accessToken}/preview.docx`),
+
     getReview: (token, accessToken) => request(`/tasks/token/${accessToken}/review`, { token }),
     approveByAccessToken: (token, accessToken) =>
       request(`/tasks/token/${accessToken}/approve`, { method: 'POST', token }),
     rejectByAccessToken: (token, accessToken, revisionNotes) =>
       request(`/tasks/token/${accessToken}/reject`, { method: 'POST', token, body: { revisionNotes } }),
+    reopenByAccessToken: (token, accessToken, note) =>
+      request(`/tasks/token/${accessToken}/reopen`, { method: 'POST', token, body: { note: note || null } }),
   },
 
   admin: {

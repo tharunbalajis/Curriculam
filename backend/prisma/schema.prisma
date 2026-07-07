@@ -16,6 +16,7 @@ model departments {
   revision_date    DateTime?          @db.Date
   created_at       DateTime?          @default(now()) @db.Timestamp(6)
   courses          courses[]
+  common_courses   course_common_departments[]
   download_history download_history[]
   tasks            tasks[]
   users            users[]
@@ -65,10 +66,14 @@ model courses {
   total_tutorial_periods Int?
   created_at             DateTime?         @default(now()) @db.Timestamp(6)
   updated_at             DateTime?         @default(now()) @db.Timestamp(6)
+  /// DEPRECATED: superseded by course_common_departments join rows. Kept so
+  /// courses saved before the join table still render their (Common to ...)
+  /// line; do not write from new code.
   common_to              String?
   prerequisites          String?
   course_outcomes        course_outcomes[]
   department             departments?      @relation(fields: [department_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  common_departments     course_common_departments[]
   syllabus_units         syllabus_units[]
   tasks                  tasks[]
   textbooks              textbooks[]
@@ -90,6 +95,16 @@ model syllabus_units {
   tutorial_hours Int?
   created_at     DateTime? @default(now()) @db.Timestamp(6)
   course      courses?  @relation(fields: [course_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+}
+
+model course_common_departments {
+  course_id     String      @db.Uuid
+  department_id String      @db.Uuid
+  course        courses     @relation(fields: [course_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  department    departments @relation(fields: [department_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@id([course_id, department_id])
+  @@index([department_id], map: "idx_course_common_departments_department")
 }
 
 model textbooks {
@@ -128,7 +143,9 @@ model tasks {
   department_id    String?      @db.Uuid
   assigned_to      String?      @db.Uuid
   assigned_by      String?      @db.Uuid
-  /// CHECK (status IN ('assigned','in_progress','submitted','approved','rejected'))
+  /// CHECK (status IN ('assigned','in_progress','submitted','reopened','approved','rejected'))
+  /// 'reopened' = an approved task reopened for further edits; behaves like
+  /// 'rejected' for edit access but is labeled distinctly to the faculty member
   status           String?      @default("assigned") @db.VarChar(20)
   deadline         DateTime?    @db.Date
   access_token     String?      @unique(map: "idx_tasks_access_token") @default(dbgenerated("uuid_generate_v4()")) @db.Uuid

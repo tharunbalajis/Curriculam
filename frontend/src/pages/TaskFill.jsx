@@ -35,12 +35,22 @@ export default function TaskFill() {
     try {
       const result = await api.tasks.submitByAccessToken(token, course);
       setCourse(result.course);
-      setTaskMeta({ ...taskMeta, status: result.status, readOnly: true });
+      // Only approval locks the form — the faculty member can keep editing
+      // and resubmitting until the sub-admin approves.
+      setTaskMeta({ ...taskMeta, status: result.status, readOnly: result.status === 'approved' });
       setSubmitted(true);
     } catch (err) {
       setError(err.message);
     } finally {
       setSubmitting(false);
+    }
+  }
+
+  async function handlePreviewDocx() {
+    try {
+      await api.tasks.previewDocxByToken(token);
+    } catch (err) {
+      setError(err.message);
     }
   }
 
@@ -92,6 +102,7 @@ export default function TaskFill() {
           onCourseChange={setCourse}
           onSubmit={handleSubmit}
           submitting={submitting}
+          onPreviewDocx={handlePreviewDocx}
         />
       </main>
     </div>

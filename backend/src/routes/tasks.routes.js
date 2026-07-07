@@ -1,5 +1,40 @@
 const { sanitizeCourse, courseInclude, replaceCourseChildren, courseChildSchema, computeTotalPeriods } = require('./courses.routes');
+const { generateCoursesDocx } = require('../services/documentGenerator.service');
 const emailService = require('../services/email.service');
+
+const DOCX_MIME = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+
+// Creates an assigned task + sends the assignment email. Shared by the
+// sub-admin POST / handler below and the top_admin direct-assign path in
+// courses.routes.js (which requires it lazily to avoid a circular import).
+// Callers do their own authorization; this only performs the write.
+async function createAssignedTask(fastify, { course, faculty, departmentId, assignedById, deadline }) {
+  const task = await fastify.prisma.tasks.create({
+    data: {
+      course_id: course.id,
+      department_id: departmentId,
+      assigned_to: faculty.id,
+      assigned_by: assignedById,
+      status: 'assigned',
+      deadline: new Date(deadline),
+    },
+  });
+
+  try {
+    await emailService.sendAssignmentEmail({
+      to: faculty.email,
+      facultyName: faculty.name,
+      courseCode: course.course_code,
+      courseTitle: course.course_title,
+      deadline,
+      link: `${process.env.FRONTEND_URL}/task/${task.access_token}`,
+    });
+  } catch (err) {
+    fastify.log.error({ err }, 'Failed to send assignment email');
+  }
+
+  return task;
+}
 
 function buildScalarCourseData(body, { includeCodeAndTitle = true } = {}) {
   const data = {};
@@ -68,6 +103,35 @@ async function rejectTask(prisma, task, revisionNotes) {
   });
 }
 
+// Reopens an approved task for further edits. 'reopened' behaves exactly like
+// 'rejected' for edit access (faculty can edit + resubmit, and the resubmit
+// lands back in Review Submissions) but carries distinct labeling, since
+// nothing was wrong with the original work. Re-approval locks it again with
+// no special-casing. The faculty member is notified by email so this never
+// happens silently. Callers pass the task with course + assigned_to_user
+// included and do their own authorization.
+async function reopenTask(fastify, task, note) {
+  const updated = await fastify.prisma.tasks.update({
+    where: { id: task.id },
+    data: { status: 'reopened', revision_notes: note || null, approved_at: null, approved_by: null },
+  });
+
+  if (task.assigned_to_user) {
+    // sendReopenedEmail catches its own errors — a broken SMTP config never
+    // blocks the reopen itself.
+    await emailService.sendReopenedEmail({
+      to: task.assigned_to_user.email,
+      facultyName: task.assigned_to_user.name,
+      courseCode: task.course.course_code,
+      courseTitle: task.course.course_title,
+      note: note || null,
+      link: `${process.env.FRONTEND_URL}/task/${task.access_token}`,
+    });
+  }
+
+  return updated;
+}
+
 const taskListInclude = {
   course: true,
   assigned_to_user: true,
@@ -92,7 +156,9 @@ async function maybeStartProgress(prisma, task) {
 }
 
 function shapeFillResponse(task) {
-  const readOnly = task.status === 'submitted' || task.status === 'approved';
+  // Only approval locks the form — a submitted task stays editable so the
+  // faculty member can fix mistakes and resubmit until the sub-admin decides.
+  const readOnly = task.status === 'approved';
   return {
     taskId: task.id,
     status: task.status,
@@ -102,6 +168,20 @@ function shapeFillResponse(task) {
     department: { id: task.department.id, name: task.department.name },
     course: sanitizeCourse(task.course),
   };
+}
+
+// Generates and streams the one-course preview document for a task, using
+// the same generator (and the department's fixed revision date) as the
+// Download Center exports so the preview matches the final export exactly.
+async function sendTaskPreviewDocx(reply, task) {
+  const course = sanitizeCourse(task.course);
+  const buffer = await generateCoursesDocx([course], {
+    revisionDate: task.department?.revision_date || null,
+  });
+  return reply
+    .header('Content-Type', DOCX_MIME)
+    .header('Content-Disposition', `attachment; filename="${task.course.course_code}_preview.docx"`)
+    .send(buffer);
 }
 
 // Shared by the token-based submit route (PUT /token/:token) and the
@@ -197,39 +277,35 @@ async function tasksRoutes(fastify, options) {
       const { courseId, facultyUserId, deadline } = request.body;
       const departmentId = request.user.departmentId;
 
-      const course = await fastify.prisma.courses.findUnique({ where: { id: courseId } });
+      const course = await fastify.prisma.courses.findUnique({
+        where: { id: courseId },
+        include: { common_departments: true },
+      });
       if (!course || course.department_id !== departmentId) {
         throw fastify.httpErrors.badRequest('Course does not belong to your department');
       }
 
+      // A shared ("common to") course may be filled by faculty from any of
+      // its common-to departments, not just the owning one. Unrelated
+      // departments are still rejected.
+      const allowedDepartmentIds = new Set([
+        course.department_id,
+        ...course.common_departments.map((cd) => cd.department_id),
+      ]);
       const faculty = await fastify.prisma.users.findUnique({ where: { id: facultyUserId } });
-      if (!faculty || faculty.role !== 'faculty' || faculty.department_id !== departmentId) {
-        throw fastify.httpErrors.badRequest('Faculty member does not belong to your department');
+      if (!faculty || faculty.role !== 'faculty' || !allowedDepartmentIds.has(faculty.department_id)) {
+        throw fastify.httpErrors.badRequest(
+          "Faculty member must belong to this course's department or one of its common-to departments"
+        );
       }
 
-      const task = await fastify.prisma.tasks.create({
-        data: {
-          course_id: courseId,
-          department_id: departmentId,
-          assigned_to: facultyUserId,
-          assigned_by: request.user.id,
-          status: 'assigned',
-          deadline: new Date(deadline),
-        },
+      const task = await createAssignedTask(fastify, {
+        course,
+        faculty,
+        departmentId,
+        assignedById: request.user.id,
+        deadline,
       });
-
-      try {
-        await emailService.sendAssignmentEmail({
-          to: faculty.email,
-          facultyName: faculty.name,
-          courseCode: course.course_code,
-          courseTitle: course.course_title,
-          deadline,
-          link: `${process.env.FRONTEND_URL}/task/${task.access_token}`,
-        });
-      } catch (err) {
-        fastify.log.error({ err }, 'Failed to send assignment email');
-      }
 
       return reply.code(201).send(sanitizeTask(task));
     },
@@ -279,8 +355,10 @@ async function tasksRoutes(fastify, options) {
       if (task.assigned_to !== request.user.id) {
         throw fastify.httpErrors.forbidden('This task is not assigned to you');
       }
-      if (task.status === 'submitted' || task.status === 'approved') {
-        return reply.code(409).send({ message: 'This submission is read-only and can no longer be edited.' });
+      // Resubmitting from 'submitted' is allowed (updates content and
+      // refreshes submitted_at); only approval locks the submission.
+      if (task.status === 'approved') {
+        return reply.code(409).send({ message: 'This submission has been approved and can no longer be edited.' });
       }
 
       const { updatedTask, course } = await submitCourseForTask(fastify.prisma, task, request.body);
@@ -321,7 +399,70 @@ async function tasksRoutes(fastify, options) {
     },
   });
 
+  // POST /api/tasks/:id/reopen — reopen an approved task for further edits.
+  // Available to the owning department's sub_admin and to top_admin (who,
+  // consistent with the rest of the app, has no department restriction).
+  fastify.post('/:id/reopen', {
+    preHandler: [fastify.authenticate, fastify.authorize(['sub_admin', 'top_admin'])],
+    schema: {
+      params: { type: 'object', required: ['id'], properties: { id: { type: 'string' } } },
+      body: { type: 'object', properties: { note: { type: ['string', 'null'] } } },
+    },
+    handler: async (request, reply) => {
+      const task = await fastify.prisma.tasks.findUnique({
+        where: { id: request.params.id },
+        include: { course: true, assigned_to_user: true },
+      });
+      if (!task) throw fastify.httpErrors.notFound('Task not found');
+      if (request.user.role === 'sub_admin' && task.department_id !== request.user.departmentId) {
+        throw fastify.httpErrors.forbidden();
+      }
+      if (task.status !== 'approved') {
+        return reply.code(409).send({ message: 'Only an approved task can be reopened.' });
+      }
+      const updated = await reopenTask(fastify, task, request.body?.note);
+      return sanitizeTask(updated);
+    },
+  });
+
+  // GET /api/tasks/:id/preview.docx — faculty-only preview of their own
+  // task's current course content as a document, whatever its status (even
+  // unsubmitted drafts). This is NOT the Download Center (which faculty
+  // still cannot reach) — it is scoped to exactly one task the requester is
+  // assigned to.
+  fastify.get('/:id/preview.docx', {
+    preHandler: [fastify.authenticate, fastify.authorize(['faculty'])],
+    schema: { params: { type: 'object', required: ['id'], properties: { id: { type: 'string' } } } },
+    handler: async (request, reply) => {
+      const task = await fastify.prisma.tasks.findUnique({
+        where: { id: request.params.id },
+        include: fillInclude,
+      });
+      if (!task) throw fastify.httpErrors.notFound('Task not found');
+      if (task.assigned_to !== request.user.id) {
+        throw fastify.httpErrors.forbidden('This task is not assigned to you');
+      }
+      return sendTaskPreviewDocx(reply, task);
+    },
+  });
+
   // ---- Public, token-authorized routes (emailed-link fill flow) ----
+
+  // GET /api/tasks/token/:token/preview.docx — token-authorized counterpart
+  // for the emailed-link fill page (/task/:token), same trust model as the
+  // token-based GET/PUT above. Also used by the sub-admin review page
+  // (/review/:token) to download the submission before deciding.
+  fastify.get('/token/:token/preview.docx', {
+    schema: { params: { type: 'object', required: ['token'], properties: { token: { type: 'string' } } } },
+    handler: async (request, reply) => {
+      const task = await fastify.prisma.tasks.findUnique({
+        where: { access_token: request.params.token },
+        include: fillInclude,
+      });
+      if (!task) throw fastify.httpErrors.notFound('Task not found');
+      return sendTaskPreviewDocx(reply, task);
+    },
+  });
 
   fastify.get('/token/:token', {
     schema: { params: { type: 'object', required: ['token'], properties: { token: { type: 'string' } } } },
@@ -349,8 +490,9 @@ async function tasksRoutes(fastify, options) {
       });
       if (!task) throw fastify.httpErrors.notFound('Task not found');
 
-      if (task.status === 'submitted' || task.status === 'approved') {
-        return reply.code(409).send({ message: 'This submission is read-only and can no longer be edited.' });
+      // Same rule as the authenticated submit route: only approval locks it.
+      if (task.status === 'approved') {
+        return reply.code(409).send({ message: 'This submission has been approved and can no longer be edited.' });
       }
 
       const { updatedTask, course } = await submitCourseForTask(fastify.prisma, task, request.body);
@@ -407,6 +549,30 @@ async function tasksRoutes(fastify, options) {
       return sanitizeTask(updated);
     },
   });
+
+  // Token counterpart of POST /:id/reopen, for the sub-admin review page
+  // (/review/:token) — mirrors the token approve/reject routes above.
+  fastify.post('/token/:token/reopen', {
+    preHandler: [fastify.authenticate, fastify.authorize(['sub_admin'])],
+    schema: {
+      params: { type: 'object', required: ['token'], properties: { token: { type: 'string' } } },
+      body: { type: 'object', properties: { note: { type: ['string', 'null'] } } },
+    },
+    handler: async (request, reply) => {
+      const task = await fastify.prisma.tasks.findUnique({
+        where: { access_token: request.params.token },
+        include: { course: true, assigned_to_user: true },
+      });
+      if (!task) throw fastify.httpErrors.notFound('Task not found');
+      if (task.department_id !== request.user.departmentId) throw fastify.httpErrors.forbidden();
+      if (task.status !== 'approved') {
+        return reply.code(409).send({ message: 'Only an approved task can be reopened.' });
+      }
+      const updated = await reopenTask(fastify, task, request.body?.note);
+      return sanitizeTask(updated);
+    },
+  });
 }
 
 module.exports = tasksRoutes;
+module.exports.createAssignedTask = createAssignedTask;

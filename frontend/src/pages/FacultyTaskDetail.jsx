@@ -43,13 +43,23 @@ export default function FacultyTaskDetail() {
     try {
       const result = await api.tasks.submitById(token, id, course);
       setCourse(result.course);
-      setTaskMeta({ ...taskMeta, status: result.status, readOnly: true });
+      // Only approval locks the form — after (re)submitting, the task stays
+      // editable so mistakes can be fixed before the sub-admin decides.
+      setTaskMeta({ ...taskMeta, status: result.status, readOnly: result.status === 'approved' });
       toast.success('Submitted for review. Your sub-admin has been notified by email.');
       navigate('/faculty');
     } catch (err) {
       toast.error(err.message);
     } finally {
       setSubmitting(false);
+    }
+  }
+
+  async function handlePreviewDocx() {
+    try {
+      await api.tasks.previewDocxById(token, id);
+    } catch (err) {
+      toast.error(err.message);
     }
   }
 
@@ -71,6 +81,7 @@ export default function FacultyTaskDetail() {
           onCourseChange={setCourse}
           onSubmit={handleSubmit}
           submitting={submitting}
+          onPreviewDocx={handlePreviewDocx}
         />
       )}
     </AppShell>

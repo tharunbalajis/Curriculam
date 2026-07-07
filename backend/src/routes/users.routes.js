@@ -7,14 +7,25 @@ function sanitizeUser(user) {
     email: user.email,
     role: user.role,
     departmentId: user.department_id,
+    // Present only when the department relation was included in the query —
+    // used by the assign-task faculty picker to show who is from where.
+    department: user.department
+      ? { id: user.department.id, name: user.department.name, code: user.department.code }
+      : undefined,
     createdAt: user.created_at,
   };
 }
 
 async function usersRoutes(fastify, options) {
-  // GET /api/users?departmentId=&role= — top_admin sees everything (optionally
-  // filtered), sub_admin is always scoped to their own department regardless
-  // of any departmentId sent in the query string.
+  // GET /api/users?departmentId=&role=&scope= — top_admin sees everything
+  // (optionally filtered), sub_admin is always scoped to their own department
+  // regardless of any departmentId sent in the query string.
+  //
+  // Single deliberate exception: `scope=college` combined with role=faculty
+  // lets a sub_admin list faculty college-wide — needed by the assign-task
+  // picker now that shared ("common to") courses can be assigned to faculty
+  // from partner departments. It applies to the faculty role only; every
+  // other sub_admin user query stays department-scoped.
   fastify.get('/', {
     preHandler: [fastify.authenticate, fastify.authorize(['top_admin', 'sub_admin'])],
     schema: {
@@ -23,15 +34,17 @@ async function usersRoutes(fastify, options) {
         properties: {
           departmentId: { type: 'string' },
           role: { type: 'string', enum: ['top_admin', 'sub_admin', 'faculty'] },
+          scope: { type: 'string', enum: ['college'] },
         },
       },
     },
     handler: async (request) => {
       const where = {};
 
-      if (request.user.role === 'sub_admin') {
+      const collegeWideFaculty = request.query.scope === 'college' && request.query.role === 'faculty';
+      if (request.user.role === 'sub_admin' && !collegeWideFaculty) {
         where.department_id = request.user.departmentId;
-      } else if (request.query.departmentId) {
+      } else if (request.user.role !== 'sub_admin' && request.query.departmentId) {
         where.department_id = request.query.departmentId;
       }
 
@@ -39,7 +52,11 @@ async function usersRoutes(fastify, options) {
         where.role = request.query.role;
       }
 
-      const users = await fastify.prisma.users.findMany({ where, orderBy: { name: 'asc' } });
+      const users = await fastify.prisma.users.findMany({
+        where,
+        include: { department: true },
+        orderBy: { name: 'asc' },
+      });
       return users.map(sanitizeUser);
     },
   });

@@ -14,19 +14,33 @@ function slug(text) {
     .replace(/^_+|_+$/g, '') || 'export';
 }
 
+// "Belongs to department X" for filtering purposes: X owns the course OR X
+// is one of its common-to departments — the same OR-join the Overview
+// accordion's course listing uses. A single findMany with OR returns each
+// course once (the owner matches both branches but is not duplicated).
+function departmentScope(departmentId) {
+  return {
+    OR: [
+      { department_id: departmentId },
+      { common_departments: { some: { department_id: departmentId } } },
+    ],
+  };
+}
+
 // Resolves the department/semester/status/courseIds filter combination into
 // an actual list of course rows (with their latest task for status), scoped
 // by role. sub_admin is always pinned to their own department and to
 // 'approved' status regardless of what the client sends — the same
 // department-scoping and never-trust-the-client principles used everywhere
-// else in this API.
+// else in this API. "Their own department" includes courses common to it,
+// not only courses it strictly owns.
 async function resolveCourses(prisma, user, filters) {
   const where = {};
 
   if (user.role === 'sub_admin') {
-    where.department_id = user.departmentId;
+    Object.assign(where, departmentScope(user.departmentId));
   } else if (filters.departmentId && filters.departmentId !== 'all') {
-    where.department_id = filters.departmentId;
+    Object.assign(where, departmentScope(filters.departmentId));
   }
 
   if (filters.semester && filters.semester !== 'all') {

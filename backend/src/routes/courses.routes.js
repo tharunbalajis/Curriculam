@@ -4,9 +4,23 @@ const courseInclude = {
   syllabus_units: { orderBy: { unit_number: 'asc' } },
   textbooks: { orderBy: { sequence_number: 'asc' } },
   course_outcomes: { orderBy: { sequence_number: 'asc' } },
+  common_departments: { include: { department: true }, orderBy: { department: { code: 'asc' } } },
 };
 
+// "Common to CSE" / "Common to CSE and AI&DS" / "Common to CSE, AI&DS and MECH"
+// — the exact phrasing the master copy uses for its (Common to ...) line.
+function formatCommonToText(codes) {
+  if (!codes.length) return null;
+  if (codes.length === 1) return `Common to ${codes[0]}`;
+  return `Common to ${codes.slice(0, -1).join(', ')} and ${codes[codes.length - 1]}`;
+}
+
 function sanitizeCourse(course) {
+  const commonDepartments = (course.common_departments || [])
+    .map((cd) => cd.department)
+    .filter(Boolean)
+    .map((d) => ({ id: d.id, name: d.name, code: d.code }));
+
   return {
     id: course.id,
     courseCode: course.course_code,
@@ -25,7 +39,13 @@ function sanitizeCourse(course) {
     introduction: course.introduction,
     totalLecturePeriods: course.total_lecture_periods,
     totalTutorialPeriods: course.total_tutorial_periods,
-    commonTo: course.common_to,
+    // Join rows are the source of truth; the legacy free-text common_to
+    // column only backs courses saved before the join table existed. The
+    // display string is computed here so every consumer (docx, pdf, forms)
+    // sees one consistent value.
+    commonTo: commonDepartments.length ? formatCommonToText(commonDepartments.map((d) => d.code)) : course.common_to,
+    commonToDepartments: commonDepartments,
+    commonToDepartmentIds: commonDepartments.map((d) => d.id),
     prerequisites: course.prerequisites,
     syllabusUnits: (course.syllabus_units || []).map((u) => ({
       id: u.id,
@@ -106,6 +126,21 @@ function computeTotalPeriods(body) {
     total_lecture_periods: body.syllabusUnits.reduce((sum, u) => sum + (u.lectureHours ?? u.hours ?? 0), 0),
     total_tutorial_periods: body.syllabusUnits.reduce((sum, u) => sum + (u.tutorialHours ?? 0), 0),
   };
+}
+
+// Replace-all-on-save for the "common to" join rows — same pattern as
+// replaceCourseChildren below. Deliberately NOT part of replaceCourseChildren:
+// like course_code/course_title, the common-to list is identity metadata set
+// by top_admin only, and the faculty submission path must never touch it.
+async function replaceCommonDepartments(prisma, courseId, departmentIds) {
+  await prisma.course_common_departments.deleteMany({ where: { course_id: courseId } });
+  const ids = [...new Set(departmentIds || [])];
+  if (ids.length) {
+    await prisma.course_common_departments.createMany({
+      data: ids.map((departmentId) => ({ course_id: courseId, department_id: departmentId })),
+      skipDuplicates: true,
+    });
+  }
 }
 
 // Replace-all-on-save for a course's child rows: syllabus units, textbooks
@@ -281,7 +316,10 @@ async function coursesRoutes(fastify, options) {
     schema: {
       body: {
         type: 'object',
-        required: ['courseCode', 'courseTitle', 'departmentId', 'semester'],
+        // departmentId is not in `required`: for a shared course the owner is
+        // derived from the first commonToDepartmentIds entry instead. The
+        // handler still enforces that one of the two is present.
+        required: ['courseCode', 'courseTitle', 'semester'],
         properties: {
           courseCode: { type: 'string', minLength: 1 },
           courseTitle: { type: 'string', minLength: 1 },
@@ -298,6 +336,9 @@ async function coursesRoutes(fastify, options) {
           totalLecturePeriods: { type: 'integer' },
           totalTutorialPeriods: { type: 'integer' },
           commonTo: { type: 'string' },
+          commonToDepartmentIds: { type: 'array', items: { type: 'string' } },
+          facultyUserId: { type: 'string' },
+          deadline: { type: 'string', format: 'date' },
           prerequisites: { type: 'string' },
           ...courseChildSchema,
         },
@@ -309,8 +350,54 @@ async function coursesRoutes(fastify, options) {
         return reply.code(409).send({ message: 'A course with this course code already exists.' });
       }
 
-      const created = await fastify.prisma.courses.create({ data: buildScalarCourseData(request.body) });
+      // Owning department: an explicit departmentId wins (non-shared course);
+      // otherwise the first Common To department is the owner. The owner also
+      // stays in course_common_departments so "every course relevant to
+      // department X" queries can rely on the join table alone.
+      const owningDepartmentId = request.body.departmentId || (request.body.commonToDepartmentIds || [])[0];
+      if (!owningDepartmentId) {
+        throw fastify.httpErrors.badRequest('Select a department (or at least one Common To department).');
+      }
+
+      const { facultyUserId, deadline } = request.body;
+      if ((facultyUserId && !deadline) || (!facultyUserId && deadline)) {
+        throw fastify.httpErrors.badRequest('Direct assignment needs both a faculty member and a deadline.');
+      }
+
+      // Validate the faculty up front so a bad id doesn't leave a half-created
+      // course. Top_admin's direct-assign path is deliberately college-wide:
+      // top_admin has no department restriction anywhere else in this app, so
+      // any faculty member is eligible (unlike the sub-admin assign flow).
+      let faculty = null;
+      if (facultyUserId) {
+        faculty = await fastify.prisma.users.findUnique({ where: { id: facultyUserId } });
+        if (!faculty || faculty.role !== 'faculty') {
+          throw fastify.httpErrors.badRequest('Selected user is not a faculty member');
+        }
+      }
+
+      const created = await fastify.prisma.courses.create({
+        data: { ...buildScalarCourseData(request.body), department_id: owningDepartmentId },
+      });
       await replaceCourseChildren(fastify.prisma, created.id, request.body);
+      if (request.body.commonToDepartmentIds !== undefined) {
+        await replaceCommonDepartments(fastify.prisma, created.id, request.body.commonToDepartmentIds);
+      }
+
+      // Direct assignment at creation (top_admin-only route): creates the
+      // task immediately so the course skips every sub-admin's unassigned
+      // queue. The task's department_id stays the course's own primary
+      // department — that department's sub-admin still owns review/approval.
+      if (faculty) {
+        const { createAssignedTask } = require('./tasks.routes');
+        await createAssignedTask(fastify, {
+          course: created,
+          faculty,
+          departmentId: created.department_id,
+          assignedById: request.user.id,
+          deadline,
+        });
+      }
 
       const course = await fastify.prisma.courses.findUnique({ where: { id: created.id }, include: courseInclude });
       return reply.code(201).send(sanitizeCourse(course));
@@ -339,6 +426,7 @@ async function coursesRoutes(fastify, options) {
           totalLecturePeriods: { type: 'integer' },
           totalTutorialPeriods: { type: 'integer' },
           commonTo: { type: 'string' },
+          commonToDepartmentIds: { type: 'array', items: { type: 'string' } },
           prerequisites: { type: 'string' },
           ...courseChildSchema,
         },
@@ -353,6 +441,9 @@ async function coursesRoutes(fastify, options) {
 
       await fastify.prisma.courses.update({ where: { id }, data: buildScalarCourseData(request.body) });
       await replaceCourseChildren(fastify.prisma, id, request.body);
+      if (request.body.commonToDepartmentIds !== undefined) {
+        await replaceCommonDepartments(fastify.prisma, id, request.body.commonToDepartmentIds);
+      }
 
       const course = await fastify.prisma.courses.findUnique({ where: { id }, include: courseInclude });
       return sanitizeCourse(course);

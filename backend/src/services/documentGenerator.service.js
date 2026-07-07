@@ -135,6 +135,17 @@ function rightTabParagraph(runsBeforeTab, tailText, opts = {}) {
   });
 }
 
+// Builds the "(Common to ...)" line text from the course's linked common-to
+// departments (source of truth since the course_common_departments join
+// table). Falls back to the legacy free-text common_to value for courses
+// saved before the join table existed.
+function commonToText(course) {
+  const codes = (course.commonToDepartments || []).map((d) => d.code || d.name).filter(Boolean);
+  if (codes.length === 0) return course.commonTo || '';
+  if (codes.length === 1) return `Common to ${codes[0]}`;
+  return `Common to ${codes.slice(0, -1).join(', ')} and ${codes[codes.length - 1]}`;
+}
+
 // Per-unit hours label matching the master exactly: "(9+3)" for a
 // lecture+tutorial unit, "(9)" when there are no tutorial hours (e.g. a
 // lab-only unit). Units saved before the lecture/tutorial split only carry
@@ -178,9 +189,10 @@ function buildCourseContent(course) {
     })
   );
 
-  if (course.commonTo) {
+  const commonLine = commonToText(course);
+  if (commonLine) {
     content.push(
-      para(run(`(${course.commonTo})`, { bold: true }), { alignment: AlignmentType.CENTER, spacing: { after: 60 } })
+      para(run(`(${commonLine})`, { bold: true }), { alignment: AlignmentType.CENTER, spacing: { after: 60 } })
     );
   }
 
