@@ -20,17 +20,24 @@ async function createAssignedTask(fastify, { course, faculty, departmentId, assi
     },
   });
 
-  try {
-    await emailService.sendAssignmentEmail({
-      to: faculty.email,
-      facultyName: faculty.name,
-      courseCode: course.course_code,
-      courseTitle: course.course_title,
-      deadline,
-      link: `${process.env.FRONTEND_URL}/task/${task.access_token}`,
-    });
-  } catch (err) {
-    fastify.log.error({ err }, 'Failed to send assignment email');
+  const department = departmentId
+    ? await fastify.prisma.departments.findUnique({ where: { id: departmentId } })
+    : null;
+
+  // sendAssignmentEmail never throws — it resolves to { sent, reason } so a
+  // delivery failure is visible in the logs without failing task creation.
+  const emailResult = await emailService.sendAssignmentEmail({
+    to: faculty.email,
+    facultyName: faculty.name,
+    courseCode: course.course_code,
+    courseTitle: course.course_title,
+    departmentName: department?.name || null,
+    deadline,
+    taskId: task.id,
+    link: `${process.env.FRONTEND_URL}/task/${task.access_token}`,
+  });
+  if (!emailResult.sent) {
+    fastify.log.warn({ result: emailResult, to: faculty.email, taskId: task.id }, 'Assignment email did not actually send');
   }
 
   return task;
@@ -117,9 +124,9 @@ async function reopenTask(fastify, task, note) {
   });
 
   if (task.assigned_to_user) {
-    // sendReopenedEmail catches its own errors — a broken SMTP config never
-    // blocks the reopen itself.
-    await emailService.sendReopenedEmail({
+    // sendReopenedEmail never throws — a broken SMTP config never blocks the
+    // reopen itself, but a failed send is logged rather than swallowed.
+    const emailResult = await emailService.sendReopenedEmail({
       to: task.assigned_to_user.email,
       facultyName: task.assigned_to_user.name,
       courseCode: task.course.course_code,
@@ -127,6 +134,9 @@ async function reopenTask(fastify, task, note) {
       note: note || null,
       link: `${process.env.FRONTEND_URL}/task/${task.access_token}`,
     });
+    if (!emailResult.sent) {
+      fastify.log.warn({ result: emailResult, to: task.assigned_to_user.email }, 'Reopened email did not actually send');
+    }
   }
 
   return updated;

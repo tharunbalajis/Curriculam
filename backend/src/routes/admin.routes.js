@@ -218,7 +218,7 @@ async function adminRoutes(fastify, options) {
     handler: async (request, reply) => {
       const task = await fastify.prisma.tasks.findUnique({
         where: { id: request.params.id },
-        include: { course: true },
+        include: { course: true, department: true },
       });
       if (!task) throw fastify.httpErrors.notFound('Task not found');
 
@@ -241,17 +241,20 @@ async function adminRoutes(fastify, options) {
         },
       });
 
-      try {
-        await emailService.sendAssignmentEmail({
-          to: faculty.email,
-          facultyName: faculty.name,
-          courseCode: task.course.course_code,
-          courseTitle: task.course.course_title,
-          deadline: request.body.deadline,
-          link: `${process.env.FRONTEND_URL}/task/${updated.access_token}`,
-        });
-      } catch (err) {
-        fastify.log.error({ err }, 'Failed to send reassignment email');
+      // Never throws — resolves to { sent, reason }; a failed send is logged
+      // loudly but does not fail the reassignment itself.
+      const emailResult = await emailService.sendAssignmentEmail({
+        to: faculty.email,
+        facultyName: faculty.name,
+        courseCode: task.course.course_code,
+        courseTitle: task.course.course_title,
+        departmentName: task.department?.name || null,
+        deadline: request.body.deadline,
+        taskId: updated.id,
+        link: `${process.env.FRONTEND_URL}/task/${updated.access_token}`,
+      });
+      if (!emailResult.sent) {
+        fastify.log.warn({ result: emailResult, to: faculty.email, taskId: updated.id }, 'Assignment email did not actually send');
       }
 
       return sanitizeTask({ ...updated, course: task.course });
