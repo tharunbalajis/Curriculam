@@ -1,7 +1,10 @@
+const fs = require('fs');
+const path = require('path');
 const {
   Document,
   Paragraph,
   TextRun,
+  ImageRun,
   Table,
   TableRow,
   TableCell,
@@ -286,6 +289,88 @@ function buildCourseContent(course) {
 }
 
 // ---------------------------------------------------------------------------
+// Cover / title page (master doc page 1).
+// ---------------------------------------------------------------------------
+
+const LOGO_PATH = path.join(__dirname, '..', 'assets', 'psg_logo.png');
+let cachedLogo;
+
+// Loaded lazily and cached so a missing asset degrades to a logo-less cover
+// page instead of breaking every export at require time.
+function loadLogo() {
+  if (cachedLogo === undefined) {
+    try {
+      cachedLogo = fs.readFileSync(LOGO_PATH);
+    } catch {
+      cachedLogo = null;
+    }
+  }
+  return cachedLogo;
+}
+
+// The opening cover page: institute identity, logo, regulations line, book
+// title, and the department the book is for. Ends with the page break that
+// separates it from the scheme tables. minCredits renders its line only when
+// set — omitted entirely otherwise, never a placeholder or zero.
+function buildCoverPage(departmentName, minCredits) {
+  const children = [
+    para(run('PSG INSTITUTE OF TECHNOLOGY AND APPLIED RESEARCH', { bold: true, size: 32 }), {
+      alignment: AlignmentType.CENTER,
+      spacing: { before: 1200, after: 120 },
+    }),
+    para(run('COIMBATORE – 641 062', { size: 24 }), { alignment: AlignmentType.CENTER, spacing: { after: 120 } }),
+    para(run('(Autonomous college affiliated to Anna University)', { size: 24 }), {
+      alignment: AlignmentType.CENTER,
+      spacing: { after: 480 },
+    }),
+  ];
+
+  const logo = loadLogo();
+  if (logo) {
+    children.push(
+      para(
+        new ImageRun({
+          type: 'png',
+          data: logo,
+          // ~0.95in x 1.17in at 96dpi (the asset's native size).
+          transformation: { width: 91, height: 112 },
+        }),
+        { alignment: AlignmentType.CENTER, spacing: { after: 480 } }
+      )
+    );
+  }
+
+  children.push(
+    para(run('2025 Regulations', { bold: true, size: 28 }), {
+      alignment: AlignmentType.CENTER,
+      spacing: { after: 480 },
+    }),
+    // TODO: derive this line from the semesters actually present in the
+    // export — hardcoded for now to match the current curriculum book title.
+    para(run('Scheme of Assessment and Syllabi for First, Second, Third and Fourth Semesters', { bold: true, size: 28 }), {
+      alignment: AlignmentType.CENTER,
+      spacing: { after: 240 },
+    }),
+    para(run('for', { size: 24 }), { alignment: AlignmentType.CENTER, spacing: { after: 240 } }),
+    para(run(`B.E. ${departmentName}`, { bold: true, size: 32 }), {
+      alignment: AlignmentType.CENTER,
+      spacing: { after: 160 },
+    })
+  );
+
+  if (minCredits != null) {
+    children.push(
+      para(run(`(Minimum No. of credits to be earned: ${minCredits})`, { size: 24 }), {
+        alignment: AlignmentType.CENTER,
+      })
+    );
+  }
+
+  children.push(new Paragraph({ children: [new PageBreak()] }));
+  return children;
+}
+
+// ---------------------------------------------------------------------------
 // Semester-wise "scheme of examination" tables (master doc page 2): one block
 // per department, one table per semester, printed before the syllabus pages.
 // ---------------------------------------------------------------------------
@@ -450,17 +535,26 @@ function buildSchemeBlocks(courses) {
   departmentOrder.forEach((departmentName, index) => {
     if (index > 0) children.push(new Paragraph({ children: [new PageBreak()] }));
 
+    const departmentCourses = byDepartment.get(departmentName);
+
     children.push(
       para(run(`B.E. ${departmentName.toUpperCase()}`.trim(), { bold: true }), {
         alignment: AlignmentType.CENTER,
         spacing: { after: 160 },
       })
     );
-    // The master also prints "(Minimum No. of credits to be earned: N)" under
-    // this title — intentionally omitted: there is no schema field for it
-    // yet, and inventing/hardcoding a number would be worse than leaving it out.
 
-    const departmentCourses = byDepartment.get(departmentName);
+    // "(Minimum No. of credits to be earned: N)" — from departments.min_credits,
+    // carried per course as departmentMinCredits; omitted entirely when unset.
+    const minCredits = departmentCourses[0]?.departmentMinCredits;
+    if (minCredits != null) {
+      children.push(
+        para(run(`(Minimum No. of credits to be earned: ${minCredits})`), {
+          alignment: AlignmentType.CENTER,
+          spacing: { after: 160 },
+        })
+      );
+    }
     const semesterOrder = [...new Set(departmentCourses.map((c) => c.semester))];
     for (const semester of semesterOrder) {
       children.push(
@@ -508,6 +602,13 @@ async function generateCoursesDocx(courses, { revisionDate = null, includeSemest
   const children = [];
 
   if (includeSemesterSummary) {
+    // Cover page for the department the book is for (the first department in
+    // the already-sorted input — the only one on scoped exports). Skipped, like
+    // the scheme tables, on single-course task previews.
+    if (courses[0]?.departmentName) {
+      children.push(...buildCoverPage(courses[0].departmentName, courses[0].departmentMinCredits ?? null));
+    }
+
     const schemeBlocks = buildSchemeBlocks(courses);
     if (schemeBlocks.length) {
       children.push(...schemeBlocks);

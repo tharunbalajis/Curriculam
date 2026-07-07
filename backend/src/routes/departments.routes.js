@@ -6,6 +6,7 @@ function sanitizeDepartment(department) {
     // DATE column -> plain YYYY-MM-DD string so clients never deal with
     // timezone-shifted midnight timestamps.
     revisionDate: department.revision_date ? department.revision_date.toISOString().slice(0, 10) : null,
+    minCredits: department.min_credits ?? null,
     createdAt: department.created_at,
   };
 }
@@ -58,6 +59,7 @@ async function departmentsRoutes(fastify, options) {
           name: { type: 'string', minLength: 1 },
           code: { type: 'string', minLength: 1, maxLength: 10 },
           revisionDate: { type: ['string', 'null'], pattern: '^\\d{4}-\\d{2}-\\d{2}$' },
+          minCredits: { type: ['integer', 'null'], minimum: 0 },
         },
       },
     },
@@ -73,6 +75,9 @@ async function departmentsRoutes(fastify, options) {
       if (request.body.code) data.code = request.body.code;
       if (request.body.revisionDate !== undefined) {
         data.revision_date = request.body.revisionDate ? new Date(`${request.body.revisionDate}T00:00:00Z`) : null;
+      }
+      if (request.body.minCredits !== undefined) {
+        data.min_credits = request.body.minCredits;
       }
 
       const department = await fastify.prisma.departments.update({ where: { id }, data });

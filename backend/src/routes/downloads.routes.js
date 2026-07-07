@@ -155,13 +155,16 @@ async function downloadsRoutes(fastify, options) {
           : departmentId && departmentId !== 'all'
           ? departmentId
           : null;
-      const targetDepartmentName = targetDepartmentId
-        ? departments.find((d) => d.id === targetDepartmentId)?.name || null
+      const targetDepartment = targetDepartmentId
+        ? departments.find((d) => d.id === targetDepartmentId) || null
         : null;
 
       const sanitized = courses.map((c) => ({
         ...sanitizeCourse(c),
-        departmentName: targetDepartmentName || c.department?.name,
+        departmentName: targetDepartment?.name || c.department?.name,
+        // Cover page + scheme heading's "(Minimum No. of credits...)" line —
+        // same target-vs-owner resolution as departmentName above.
+        departmentMinCredits: targetDepartment ? targetDepartment.min_credits : c.department?.min_credits ?? null,
       }));
 
       // Header revision date: only meaningful when the export covers a single
