@@ -177,6 +177,9 @@ async function sendTaskPreviewDocx(reply, task) {
   const course = sanitizeCourse(task.course);
   const buffer = await generateCoursesDocx([course], {
     revisionDate: task.department?.revision_date || null,
+    // One course out of context — the semester-wide scheme table belongs to
+    // full curriculum-book exports, not a single-task preview.
+    includeSemesterSummary: false,
   });
   return reply
     .header('Content-Type', DOCX_MIME)

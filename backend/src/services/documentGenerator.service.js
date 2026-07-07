@@ -51,6 +51,10 @@ function noBorderCell(text, opts = {}) {
   return new TableCell({
     children: [para(run(text, opts.runOpts), { alignment: opts.alignment })],
     width: opts.width,
+    // Optional merges for the scheme table's two-row header ("Hours / Week" /
+    // "Maximum Marks" span 3 sub-columns; label cells span both header rows).
+    columnSpan: opts.columnSpan,
+    rowSpan: opts.rowSpan,
     verticalAlign: VerticalAlign.CENTER,
     margins: { top: 40, bottom: 40, left: 60, right: 60 },
   });
@@ -133,6 +137,33 @@ function rightTabParagraph(runsBeforeTab, tailText, opts = {}) {
     spacing: { after: 160 },
     ...opts,
   });
+}
+
+// One numbered TEXT BOOKS / REFERENCES line with the book title in italics,
+// matching the master. formattedReference always wraps the title as
+// `'Title'.` (see referenceFormatter.service.js's formatReference) — split
+// around that exact substring rather than re-deriving the citation. The
+// quotes and trailing period stay inside the italic run, per the master's
+// styling. Falls back to today's single plain run when the title is missing
+// or can't be located (legacy rows) — never throws.
+function referenceParagraph(entry, index) {
+  const formatted = entry.formattedReference || '';
+  const quotedTitle = entry.title ? `'${entry.title}'.` : '';
+  const at = quotedTitle ? formatted.indexOf(quotedTitle) : -1;
+  const opts = { spacing: { after: 40 } };
+
+  if (at === -1) {
+    return para(run(`${index + 1}. ${formatted}`), opts);
+  }
+
+  return para(
+    [
+      run(`${index + 1}. ${formatted.slice(0, at)}`),
+      run(quotedTitle, { italics: true }),
+      run(formatted.slice(at + quotedTitle.length)),
+    ],
+    opts
+  );
 }
 
 // Builds the "(Common to ...)" line text from the course's linked common-to
@@ -233,16 +264,12 @@ function buildCourseContent(course) {
 
   if (textbooks.length) {
     content.push(para(run('TEXT BOOKS', { bold: true }), { spacing: { before: 120, after: 80 } }));
-    textbooks.forEach((t, i) => {
-      content.push(para(run(`${i + 1}. ${t.formattedReference || ''}`), { spacing: { after: 40 } }));
-    });
+    textbooks.forEach((t, i) => content.push(referenceParagraph(t, i)));
   }
 
   if (references.length) {
     content.push(para(run('REFERENCES', { bold: true }), { spacing: { before: 120, after: 80 } }));
-    references.forEach((r, i) => {
-      content.push(para(run(`${i + 1}. ${r.formattedReference || ''}`), { spacing: { after: 40 } }));
-    });
+    references.forEach((r, i) => content.push(referenceParagraph(r, i)));
   }
 
   if ((course.courseOutcomes || []).length) {
@@ -256,6 +283,200 @@ function buildCourseContent(course) {
   }
 
   return content;
+}
+
+// ---------------------------------------------------------------------------
+// Semester-wise "scheme of examination" tables (master doc page 2): one block
+// per department, one table per semester, printed before the syllabus pages.
+// ---------------------------------------------------------------------------
+
+const ROMAN_SEMESTERS = ['I', 'II', 'III', 'IV', 'V', 'VI', 'VII', 'VIII'];
+
+function romanSemester(semester) {
+  return ROMAN_SEMESTERS[semester - 1] || String(semester);
+}
+
+// Numeric scheme-table cell value: null/undefined renders as '-' (e.g. a
+// mandatory course with no marks), everything else via Number so Prisma
+// Decimals like 4.00 print as "4".
+function schemeNumber(value) {
+  return value === null || value === undefined ? '-' : String(Number(value));
+}
+
+// Splits one semester's courses into the master's three labeled sub-sections.
+// category 'MC' wins over the hours-based bucketing; PRACTICALS is lab-only
+// (no lecture/tutorial hours); THEORY is everything else — including mixed
+// lecture+practical courses, so no course is ever silently dropped.
+function schemeSections(semesterCourses) {
+  const sections = [
+    { label: 'THEORY', courses: [] },
+    { label: 'PRACTICALS', courses: [] },
+    { label: 'MANDATORY COURSES', courses: [] },
+  ];
+
+  for (const course of semesterCourses) {
+    const lecture = Number(course.lectureHours) || 0;
+    const tutorial = Number(course.tutorialHours) || 0;
+    const practical = Number(course.practicalHours) || 0;
+
+    if (course.category === 'MC') sections[2].courses.push(course);
+    else if (lecture === 0 && tutorial === 0 && practical > 0) sections[1].courses.push(course);
+    else sections[0].courses.push(course);
+  }
+
+  return sections.filter((s) => s.courses.length > 0);
+}
+
+// Column widths (percent) for the 11 physical columns:
+// S.No | Code | Title | L | T | P | Credits | CA | ESE | Total | CAT
+const SCHEME_WIDTHS = [6, 12, 30, 6, 6, 6, 7, 7, 7, 7, 6];
+const SCHEME_COLUMNS = 11;
+
+function schemeWidth(index) {
+  return { size: SCHEME_WIDTHS[index], type: WidthType.PERCENTAGE };
+}
+
+function buildSemesterSchemeTable(semesterCourses) {
+  const bold = { runOpts: { bold: true }, alignment: AlignmentType.CENTER };
+
+  // Two-row header: label cells span both rows; "Hours / Week" and
+  // "Maximum Marks" span their 3 sub-columns on row one, with the sub-column
+  // labels on row two.
+  const headerRowOne = new TableRow({
+    tableHeader: true,
+    children: [
+      noBorderCell('S. No.', { ...bold, rowSpan: 2, width: schemeWidth(0) }),
+      noBorderCell('Course Code', { ...bold, rowSpan: 2, width: schemeWidth(1) }),
+      noBorderCell('Course Title', { ...bold, rowSpan: 2, width: schemeWidth(2) }),
+      noBorderCell('Hours / Week', { ...bold, columnSpan: 3 }),
+      noBorderCell('Credits', { ...bold, rowSpan: 2, width: schemeWidth(6) }),
+      noBorderCell('Maximum Marks', { ...bold, columnSpan: 3 }),
+      noBorderCell('CAT', { ...bold, rowSpan: 2, width: schemeWidth(10) }),
+    ],
+  });
+  const headerRowTwo = new TableRow({
+    tableHeader: true,
+    children: [
+      noBorderCell('Lecture', { ...bold, width: schemeWidth(3) }),
+      noBorderCell('Tutorial', { ...bold, width: schemeWidth(4) }),
+      noBorderCell('Practical', { ...bold, width: schemeWidth(5) }),
+      noBorderCell('CA', { ...bold, width: schemeWidth(7) }),
+      noBorderCell('ESE', { ...bold, width: schemeWidth(8) }),
+      noBorderCell('Total', { ...bold, width: schemeWidth(9) }),
+    ],
+  });
+
+  const rows = [headerRowOne, headerRowTwo];
+  const totals = { lecture: 0, tutorial: 0, practical: 0, credits: 0, ca: 0, ese: 0, total: 0 };
+
+  for (const section of schemeSections(semesterCourses)) {
+    rows.push(
+      new TableRow({
+        children: [noBorderCell(section.label, { ...bold, columnSpan: SCHEME_COLUMNS })],
+      })
+    );
+
+    section.courses.forEach((course, i) => {
+      totals.lecture += Number(course.lectureHours) || 0;
+      totals.tutorial += Number(course.tutorialHours) || 0;
+      totals.practical += Number(course.practicalHours) || 0;
+      totals.credits += Number(course.credits) || 0;
+      totals.ca += Number(course.caMarks) || 0;
+      totals.ese += Number(course.eseMarks) || 0;
+      totals.total += Number(course.totalMarks) || 0;
+
+      rows.push(
+        new TableRow({
+          children: [
+            // S. No. restarts at 1 within each section, like the master.
+            noBorderCell(String(i + 1), { alignment: AlignmentType.CENTER, width: schemeWidth(0) }),
+            noBorderCell(course.courseCode || '', { alignment: AlignmentType.CENTER, width: schemeWidth(1) }),
+            noBorderCell(course.courseTitle || '', { width: schemeWidth(2) }),
+            noBorderCell(schemeNumber(course.lectureHours), { alignment: AlignmentType.CENTER, width: schemeWidth(3) }),
+            noBorderCell(schemeNumber(course.tutorialHours), { alignment: AlignmentType.CENTER, width: schemeWidth(4) }),
+            noBorderCell(schemeNumber(course.practicalHours), { alignment: AlignmentType.CENTER, width: schemeWidth(5) }),
+            noBorderCell(schemeNumber(course.credits), { alignment: AlignmentType.CENTER, width: schemeWidth(6) }),
+            noBorderCell(schemeNumber(course.caMarks), { alignment: AlignmentType.CENTER, width: schemeWidth(7) }),
+            noBorderCell(schemeNumber(course.eseMarks), { alignment: AlignmentType.CENTER, width: schemeWidth(8) }),
+            noBorderCell(schemeNumber(course.totalMarks), { alignment: AlignmentType.CENTER, width: schemeWidth(9) }),
+            noBorderCell(course.category || '', { alignment: AlignmentType.CENTER, width: schemeWidth(10) }),
+          ],
+        })
+      );
+    });
+  }
+
+  const totalPeriods = totals.lecture + totals.tutorial + totals.practical;
+  rows.push(
+    new TableRow({
+      children: [
+        noBorderCell(`Total ${totalPeriods} periods`, { ...bold, columnSpan: 3 }),
+        noBorderCell(String(totals.lecture), bold),
+        noBorderCell(String(totals.tutorial), bold),
+        noBorderCell(String(totals.practical), bold),
+        noBorderCell(String(Number(totals.credits.toFixed(2))), bold),
+        noBorderCell(String(totals.ca), bold),
+        noBorderCell(String(totals.ese), bold),
+        noBorderCell(String(totals.total), bold),
+        noBorderCell('', {}),
+      ],
+    })
+  );
+
+  return new Table({ rows, width: { size: 100, type: WidthType.PERCENTAGE }, borders: TABLE_BORDERS });
+}
+
+// One block per department (title + one scheme table per semester), each
+// department starting on a new page. Courses with no semester are excluded
+// from the tables (they still get their normal syllabus page).
+function buildSchemeBlocks(courses) {
+  const withSemester = courses.filter((c) => c.semester != null);
+  if (withSemester.length === 0) return [];
+
+  // Group by department preserving the input order (already sorted
+  // department, semester, course_code by the caller — don't re-sort).
+  const departmentOrder = [];
+  const byDepartment = new Map();
+  for (const course of withSemester) {
+    const key = course.departmentName || '';
+    if (!byDepartment.has(key)) {
+      byDepartment.set(key, []);
+      departmentOrder.push(key);
+    }
+    byDepartment.get(key).push(course);
+  }
+
+  const children = [];
+  departmentOrder.forEach((departmentName, index) => {
+    if (index > 0) children.push(new Paragraph({ children: [new PageBreak()] }));
+
+    children.push(
+      para(run(`B.E. ${departmentName.toUpperCase()}`.trim(), { bold: true }), {
+        alignment: AlignmentType.CENTER,
+        spacing: { after: 160 },
+      })
+    );
+    // The master also prints "(Minimum No. of credits to be earned: N)" under
+    // this title — intentionally omitted: there is no schema field for it
+    // yet, and inventing/hardcoding a number would be worse than leaving it out.
+
+    const departmentCourses = byDepartment.get(departmentName);
+    const semesterOrder = [...new Set(departmentCourses.map((c) => c.semester))];
+    for (const semester of semesterOrder) {
+      children.push(
+        para(run(`SEMESTER ${romanSemester(semester)}`, { bold: true }), {
+          alignment: AlignmentType.CENTER,
+          spacing: { before: 160, after: 80 },
+        })
+      );
+      children.push(buildSemesterSchemeTable(departmentCourses.filter((c) => c.semester === semester)));
+      // Tables can't carry spacing themselves — a small spacer keeps
+      // consecutive semester tables from visually colliding.
+      children.push(para(run(''), { spacing: { after: 160 } }));
+    }
+  });
+
+  return children;
 }
 
 // The master's header shows the fixed curriculum revision date (e.g.
@@ -279,9 +500,20 @@ function buildFooter() {
 }
 
 // Public entry point: one or many courses -> a single .docx Buffer, each
-// course starting on its own page.
-async function generateCoursesDocx(courses, { revisionDate = null } = {}) {
+// course starting on its own page. When includeSemesterSummary is true (the
+// default, used by the Download Center exports) the document opens with the
+// semester-wise scheme tables; single-course task previews pass false since
+// one course out of context isn't a curriculum book.
+async function generateCoursesDocx(courses, { revisionDate = null, includeSemesterSummary = true } = {}) {
   const children = [];
+
+  if (includeSemesterSummary) {
+    const schemeBlocks = buildSchemeBlocks(courses);
+    if (schemeBlocks.length) {
+      children.push(...schemeBlocks);
+      children.push(new Paragraph({ children: [new PageBreak()] }));
+    }
+  }
 
   courses.forEach((course, index) => {
     if (index > 0) children.push(new Paragraph({ children: [new PageBreak()] }));
