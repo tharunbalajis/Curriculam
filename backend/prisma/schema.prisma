@@ -18,6 +18,9 @@ model departments {
   /// page and under the department heading in the scheme table section;
   /// the line is omitted entirely when unset
   min_credits      Int?
+  /// Manual sort order for department appearance in combined exports; null
+  /// falls back to name order.
+  display_order    Int?
   created_at       DateTime?          @default(now()) @db.Timestamp(6)
   courses          courses[]
   common_courses   course_common_departments[]
@@ -65,6 +68,9 @@ model courses {
   total_marks            Int?              @default(dbgenerated("(ca_marks + ese_marks)"))
   /// CHECK (category IN ('BS','HS','ES','PC','PE','OE','EEC','MC'))
   category               String?           @db.VarChar(10)
+  /// Manual sort order for course appearance within its semester on exports
+  /// (the official S.No); null falls back to course_code order.
+  display_order          Int?
   introduction           String?
   total_lecture_periods  Int?
   total_tutorial_periods Int?

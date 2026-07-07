@@ -19,6 +19,26 @@ const STATUS_OPTIONS = [
   { value: 'all', label: 'All statuses' },
 ];
 
+// Deliberately-visible up/down reorder buttons (real <button>s, keyboard
+// accessible). `title` doubles as the tooltip explaining a disabled arrow.
+function ReorderArrows({ onUp, onDown, upDisabled, downDisabled, label, title }) {
+  // Disabled styling matches the Button component's pattern
+  // (disabled:opacity-60 disabled:cursor-not-allowed); the disabled
+  // attribute itself guarantees onClick can never fire.
+  const btn =
+    'px-1.5 py-0 text-[11px] leading-5 rounded border border-slate-300 bg-white text-slate-600 hover:bg-blue-50 hover:border-blue-400 hover:text-blue-700 disabled:opacity-60 disabled:cursor-not-allowed disabled:hover:bg-white disabled:hover:border-slate-300 disabled:hover:text-slate-600 cursor-pointer';
+  return (
+    <span className="inline-flex items-center gap-1 shrink-0" title={title}>
+      <button type="button" className={btn} disabled={upDisabled} aria-label={`Move ${label} up`} onClick={onUp}>
+        ▲
+      </button>
+      <button type="button" className={btn} disabled={downDisabled} aria-label={`Move ${label} down`} onClick={onDown}>
+        ▼
+      </button>
+    </span>
+  );
+}
+
 // Shared by both Top Admin and Sub Admin — sub_admin simply never sees the
 // department dropdown or the non-approved status options, matching exactly
 // what the backend already enforces (own department, approved-only) so the
@@ -37,6 +57,73 @@ export default function DownloadCenter() {
   const [loadingCourses, setLoadingCourses] = useState(true);
   const [exporting, setExporting] = useState(false);
   const [history, setHistory] = useState(null);
+  const [showDeptOrder, setShowDeptOrder] = useState(false);
+
+  // Reordering needs an unambiguous target group: a specific semester AND
+  // (for top_admin) a specific department. sub_admin is already pinned to
+  // one department, so only the semester condition applies to them.
+  const canReorderCourses = semester !== 'all' && (!isTopAdmin || departmentId !== 'all');
+
+  // Courses may only swap with a neighbor in the SAME (departmentId, semester)
+  // group — the list is grouped contiguously by department, so a differing
+  // neighbor marks a group boundary (this also covers shared-in courses,
+  // whose ordering belongs to their owning department).
+  function sameGroup(a, b) {
+    return a && b && a.departmentId === b.departmentId && a.semester === b.semester;
+  }
+
+  // Optimistic swap, then persist that department+semester group's FULL new
+  // id order (the endpoint expects the complete ordered list); revert + toast
+  // on failure.
+  async function moveCourse(index, delta) {
+    // The arrows are disabled in this state, but guard anyway so the handler
+    // is non-functional no matter how it's triggered.
+    if (!canReorderCourses) return;
+    const target = index + delta;
+    if (target < 0 || target >= courses.length) return;
+    if (!sameGroup(courses[index], courses[target])) return;
+
+    const moved = courses[index];
+    const previous = courses;
+    const next = [...courses];
+    [next[index], next[target]] = [next[target], next[index]];
+    setCourses(next);
+    try {
+      const groupIds = next
+        .filter((c) => c.departmentId === moved.departmentId && c.semester === moved.semester)
+        .map((c) => c.id);
+      await api.admin.reorderCourses(token, groupIds);
+    } catch (err) {
+      toast.error(err.message);
+      setCourses(previous);
+    }
+  }
+
+  // Optimistic department swap; the Department dropdown and this list both
+  // render from the same state, and the loaded course list is locally
+  // re-sorted to the new department order (stable within a department) so
+  // everything reflects the change immediately, no refetch needed.
+  async function moveDepartment(index, delta) {
+    const target = index + delta;
+    if (target < 0 || target >= departments.length) return;
+
+    const previousDepartments = departments;
+    const previousCourses = courses;
+    const next = [...departments];
+    [next[index], next[target]] = [next[target], next[index]];
+    setDepartments(next);
+    const rank = new Map(next.map((d, i) => [d.id, i]));
+    setCourses((prev) =>
+      [...prev].sort((a, b) => (rank.get(a.departmentId) ?? Infinity) - (rank.get(b.departmentId) ?? Infinity))
+    );
+    try {
+      await api.admin.reorderDepartments(token, next.map((d) => d.id));
+    } catch (err) {
+      toast.error(err.message);
+      setDepartments(previousDepartments);
+      setCourses(previousCourses);
+    }
+  }
 
   useEffect(() => {
     if (isTopAdmin) {
@@ -115,6 +202,40 @@ export default function DownloadCenter() {
             : 'Export the official syllabus document for your department\'s approved courses.'
         }
       >
+        {isTopAdmin && (
+          <div className="mb-4">
+            <button
+              type="button"
+              className="text-sm font-medium text-blue-600 hover:underline cursor-pointer"
+              onClick={() => setShowDeptOrder(!showDeptOrder)}
+            >
+              Reorder departments {showDeptOrder ? '▴' : '▾'}
+            </button>
+            {showDeptOrder && (
+              <div className="mt-2 border border-slate-200 rounded-md divide-y divide-slate-100 max-w-xl">
+                <p className="px-3 py-2 text-xs text-slate-500 bg-slate-50">
+                  This order controls how departments appear in combined exports and in the dropdown below.
+                </p>
+                {departments.map((d, i) => (
+                  <div key={d.id} className="flex items-center justify-between gap-3 px-3 py-2 text-sm">
+                    <span className="min-w-0 truncate">
+                      <span className="text-slate-400 mr-2">{i + 1}.</span>
+                      {d.name}
+                    </span>
+                    <ReorderArrows
+                      label={d.name}
+                      upDisabled={i === 0}
+                      downDisabled={i === departments.length - 1}
+                      onUp={() => moveDepartment(i, -1)}
+                      onDown={() => moveDepartment(i, 1)}
+                    />
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
         <div className="grid grid-cols-1 sm:grid-cols-4 gap-3 mb-4">
           {isTopAdmin && (
             <label className="block">
@@ -164,25 +285,50 @@ export default function DownloadCenter() {
             description="Try a different department, semester, or status."
           />
         ) : (
-          <div className="max-h-80 overflow-y-auto border border-slate-200 rounded-md divide-y divide-slate-100 mb-4">
-            {courses.map((c) => (
-              <label key={c.id} className="flex items-center gap-3 px-3 py-2 text-sm hover:bg-slate-50 cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={selected.has(c.id)}
-                  onChange={() => toggleCourse(c.id)}
-                  className="rounded border-slate-300"
-                />
-                <span className="flex-1">
-                  {c.courseCode} — {c.courseTitle}{' '}
-                  <span className="text-slate-400">
-                    ({c.departmentCode}, Sem {c.semester})
-                  </span>
-                </span>
-                <Badge status={c.status} />
-              </label>
-            ))}
-          </div>
+          <>
+            {!canReorderCourses && (
+              <p className="text-xs text-slate-500 mb-1">
+                {semester === 'all'
+                  ? 'Select a specific semester to reorder courses.'
+                  : 'Select a specific department to reorder courses.'}
+              </p>
+            )}
+            <div className="max-h-80 overflow-y-auto border border-slate-200 rounded-md divide-y divide-slate-100 mb-4">
+              {courses.map((c, i) => (
+                <div key={c.id} className="flex items-center gap-3 px-3 py-2 text-sm hover:bg-slate-50">
+                  <label className="flex items-center gap-3 flex-1 min-w-0 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={selected.has(c.id)}
+                      onChange={() => toggleCourse(c.id)}
+                      className="rounded border-slate-300"
+                    />
+                    <span className="flex-1 min-w-0">
+                      {c.courseCode} — {c.courseTitle}{' '}
+                      <span className="text-slate-400">
+                        ({c.departmentCode}, Sem {c.semester})
+                      </span>
+                    </span>
+                  </label>
+                  <Badge status={c.status} />
+                  <ReorderArrows
+                    label={c.courseCode}
+                    title={
+                      !canReorderCourses
+                        ? semester === 'all'
+                          ? 'Select a specific semester to reorder courses'
+                          : 'Select a specific department to reorder courses'
+                        : 'Reorder within this department + semester'
+                    }
+                    upDisabled={!canReorderCourses || !sameGroup(c, courses[i - 1])}
+                    downDisabled={!canReorderCourses || !sameGroup(c, courses[i + 1])}
+                    onUp={() => moveCourse(i, -1)}
+                    onDown={() => moveCourse(i, 1)}
+                  />
+                </div>
+              ))}
+            </div>
+          </>
         )}
 
         <p className="text-xs text-slate-500 mb-3">

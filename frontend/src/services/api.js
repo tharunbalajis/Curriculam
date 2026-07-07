@@ -128,6 +128,10 @@ export const api = {
 
   admin: {
     dashboard: (token) => request('/admin/dashboard', { token }),
+    reorderDepartments: (token, departmentIds) =>
+      request('/admin/departments/reorder', { method: 'PATCH', token, body: { departmentIds } }),
+    reorderCourses: (token, courseIds) =>
+      request('/admin/courses/reorder', { method: 'PATCH', token, body: { courseIds } }),
     departmentCourses: (token, departmentId) => request(`/admin/departments/${departmentId}/courses`, { token }),
     tasks: (token, params) => request('/admin/tasks', { token, params }),
     reassignTask: (token, id, data) => request(`/admin/tasks/${id}/reassign`, { method: 'POST', token, body: data }),

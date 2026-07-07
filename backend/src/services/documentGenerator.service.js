@@ -74,13 +74,15 @@ const TABLE_BORDERS = {
 }
 
 function buildCourseOutcomesTable(courseOutcomes) {
+  // Header matches the reference: the intro sentence spans the CO-number and
+  // description columns (regular weight, left-aligned — the default), with
+  // only "Bloom's Level" bold in its own cell.
   const headerRow = new TableRow({
     tableHeader: true,
     children: [
-      noBorderCell('', { runOpts: { bold: true }, width: { size: 8, type: WidthType.PERCENTAGE } }),
       noBorderCell('At the end of the course, students will be able to:', {
-        runOpts: { bold: true },
-        width: { size: 72, type: WidthType.PERCENTAGE },
+        columnSpan: 2,
+        width: { size: 80, type: WidthType.PERCENTAGE },
       }),
       noBorderCell("Bloom's Level", { runOpts: { bold: true }, width: { size: 20, type: WidthType.PERCENTAGE } }),
     ],
@@ -282,7 +284,7 @@ function buildCourseContent(course) {
     content.push(para(run('COs-POs & PSOs MAPPING', { bold: true }), { spacing: { before: 160, after: 80 } }));
     content.push(buildPoMappingTable(course.courseOutcomes));
 
-    content.push(para(run('1-low, 2-medium, 3-high', { italics: true }), { spacing: { before: 80 } }));
+    content.push(para(run('1-low, 2-medium, 3-high', { bold: true }), { spacing: { before: 80 } }));
   }
 
   return content;
@@ -421,8 +423,15 @@ function schemeWidth(index) {
   return { size: SCHEME_WIDTHS[index], type: WidthType.PERCENTAGE };
 }
 
-function buildSemesterSchemeTable(semesterCourses) {
+// One SEPARATE table per semester, matching the reference document: each
+// semester repeats its own two-row column header, followed by a full-width
+// left-aligned "SEMESTER <roman>" row inside the table, then the
+// section-label/course rows and the totals row.
+function buildSemesterSchemeTable(semester, semesterCourses) {
   const bold = { runOpts: { bold: true }, alignment: AlignmentType.CENTER };
+  // Semester and section label rows are LEFT-aligned in the reference —
+  // only header cells and numeric totals stay centered.
+  const labelRow = { runOpts: { bold: true }, alignment: AlignmentType.LEFT };
 
   // Two-row header: label cells span both rows; "Hours / Week" and
   // "Maximum Marks" span their 3 sub-columns on row one, with the sub-column
@@ -451,13 +460,19 @@ function buildSemesterSchemeTable(semesterCourses) {
     ],
   });
 
-  const rows = [headerRowOne, headerRowTwo];
+  const rows = [
+    headerRowOne,
+    headerRowTwo,
+    new TableRow({
+      children: [noBorderCell(`SEMESTER ${romanSemester(semester)}`, { ...labelRow, columnSpan: SCHEME_COLUMNS })],
+    }),
+  ];
   const totals = { lecture: 0, tutorial: 0, practical: 0, credits: 0, ca: 0, ese: 0, total: 0 };
 
   for (const section of schemeSections(semesterCourses)) {
     rows.push(
       new TableRow({
-        children: [noBorderCell(section.label, { ...bold, columnSpan: SCHEME_COLUMNS })],
+        children: [noBorderCell(section.label, { ...labelRow, columnSpan: SCHEME_COLUMNS })],
       })
     );
 
@@ -555,15 +570,11 @@ function buildSchemeBlocks(courses) {
         })
       );
     }
+    // One separate table per semester, each with its own repeated header —
+    // the "SEMESTER X" label is a row inside its table, not a paragraph.
     const semesterOrder = [...new Set(departmentCourses.map((c) => c.semester))];
     for (const semester of semesterOrder) {
-      children.push(
-        para(run(`SEMESTER ${romanSemester(semester)}`, { bold: true }), {
-          alignment: AlignmentType.CENTER,
-          spacing: { before: 160, after: 80 },
-        })
-      );
-      children.push(buildSemesterSchemeTable(departmentCourses.filter((c) => c.semester === semester)));
+      children.push(buildSemesterSchemeTable(semester, departmentCourses.filter((c) => c.semester === semester)));
       // Tables can't carry spacing themselves — a small spacer keeps
       // consecutive semester tables from visually colliding.
       children.push(para(run(''), { spacing: { after: 160 } }));

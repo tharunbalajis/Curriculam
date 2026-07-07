@@ -72,7 +72,9 @@ async function adminRoutes(fastify, options) {
           tasks: { include: { assigned_to_user: true }, orderBy: { created_at: 'desc' }, take: 1 },
           department: true,
         },
-        orderBy: [{ semester: 'asc' }, { course_code: 'asc' }],
+        // Same display_order-first sequence as the export, so the accordion
+        // (where the reorder arrows live) always mirrors what will print.
+        orderBy: [{ semester: 'asc' }, { display_order: 'asc' }, { course_code: 'asc' }],
       });
 
       const semesters = Array.from({ length: 8 }, (_, i) => ({ semester: i + 1, courses: [] }));
@@ -103,6 +105,78 @@ async function adminRoutes(fastify, options) {
         department: { id: department.id, name: department.name, code: department.code },
         semesters,
       };
+    },
+  });
+
+  // PATCH /api/admin/departments/reorder — top_admin sends the full desired
+  // department order; display_order becomes the array index + 1, written in
+  // one transaction so a failure can't leave a half-applied sequence.
+  fastify.patch('/departments/reorder', {
+    preHandler: [fastify.authenticate, fastify.authorize(['top_admin'])],
+    schema: {
+      body: {
+        type: 'object',
+        required: ['departmentIds'],
+        properties: {
+          departmentIds: { type: 'array', minItems: 1, items: { type: 'string' } },
+        },
+      },
+    },
+    handler: async (request) => {
+      const { departmentIds } = request.body;
+
+      const found = await fastify.prisma.departments.count({ where: { id: { in: departmentIds } } });
+      if (found !== new Set(departmentIds).size) {
+        throw fastify.httpErrors.badRequest('One or more department ids do not exist');
+      }
+
+      await fastify.prisma.$transaction(
+        departmentIds.map((id, index) =>
+          fastify.prisma.departments.update({ where: { id }, data: { display_order: index + 1 } })
+        )
+      );
+      return { ok: true };
+    },
+  });
+
+  // PATCH /api/admin/courses/reorder — desired course order within ONE
+  // semester; display_order becomes the array index + 1 (the official S.No).
+  // top_admin may reorder any department's courses; sub_admin only their
+  // own department's — validated against every id before anything is written.
+  fastify.patch('/courses/reorder', {
+    preHandler: [fastify.authenticate, fastify.authorize(['top_admin', 'sub_admin'])],
+    schema: {
+      body: {
+        type: 'object',
+        required: ['courseIds'],
+        properties: {
+          courseIds: { type: 'array', minItems: 1, items: { type: 'string' } },
+        },
+      },
+    },
+    handler: async (request) => {
+      const { courseIds } = request.body;
+
+      const courses = await fastify.prisma.courses.findMany({
+        where: { id: { in: courseIds } },
+        select: { id: true, department_id: true },
+      });
+      if (courses.length !== new Set(courseIds).size) {
+        throw fastify.httpErrors.badRequest('One or more course ids do not exist');
+      }
+      if (
+        request.user.role === 'sub_admin' &&
+        courses.some((c) => c.department_id !== request.user.departmentId)
+      ) {
+        throw fastify.httpErrors.forbidden('You can only reorder courses in your own department');
+      }
+
+      await fastify.prisma.$transaction(
+        courseIds.map((id, index) =>
+          fastify.prisma.courses.update({ where: { id }, data: { display_order: index + 1 } })
+        )
+      );
+      return { ok: true };
     },
   });
 

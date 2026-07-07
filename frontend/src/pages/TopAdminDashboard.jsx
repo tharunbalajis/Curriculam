@@ -209,6 +209,29 @@ function DepartmentAccordionRow({ department }) {
     }
   }
 
+  // Optimistic swap of a course with its neighbor within the SAME semester
+  // group (cross-semester moves are deliberately not possible here), then
+  // persist that semester's full order; revert the local state on failure.
+  async function moveCourse(semester, index, delta) {
+    const target = index + delta;
+    const sem = detail.semesters.find((s) => s.semester === semester);
+    if (!sem || target < 0 || target >= sem.courses.length) return;
+
+    const previous = detail;
+    const reordered = [...sem.courses];
+    [reordered[index], reordered[target]] = [reordered[target], reordered[index]];
+    setDetail({
+      ...detail,
+      semesters: detail.semesters.map((s) => (s.semester === semester ? { ...s, courses: reordered } : s)),
+    });
+    try {
+      await api.admin.reorderCourses(token, reordered.map((c) => c.id));
+    } catch (err) {
+      toast.error(err.message);
+      setDetail(previous);
+    }
+  }
+
   return (
     <div className="border border-slate-200 rounded-md overflow-hidden">
       <button
@@ -249,26 +272,34 @@ function DepartmentAccordionRow({ department }) {
                   <p className="text-sm text-slate-400 italic">No courses assigned.</p>
                 ) : (
                   <div className="space-y-2">
-                    {sem.courses.map((c) => (
-                      <button
-                        key={c.id}
-                        type="button"
-                        onClick={() => setDetailCourse(c)}
-                        className="w-full flex items-center justify-between gap-3 bg-white rounded-md border border-slate-200 px-3 py-2 text-left hover:border-blue-300 hover:bg-blue-50/40 transition cursor-pointer"
-                      >
-                        <div className="min-w-0">
-                          <p className="text-sm font-medium text-slate-900">
-                            {c.courseCode} — {c.courseTitle}
-                            {c.shared && (
-                              <span className="ml-2 inline-flex items-center rounded bg-amber-50 border border-amber-200 px-1.5 py-0.5 text-[10px] font-medium text-amber-800 align-middle">
-                                Shared — owned by {c.ownerCode}
-                              </span>
-                            )}
-                          </p>
-                          <p className="text-xs text-slate-500">{c.faculty || 'No faculty assigned'}</p>
-                        </div>
-                        <Badge status={c.status} />
-                      </button>
+                    {sem.courses.map((c, ci) => (
+                      <div key={c.id} className="flex items-center gap-2">
+                        <ReorderArrows
+                          label={c.courseCode}
+                          isFirst={ci === 0}
+                          isLast={ci === sem.courses.length - 1}
+                          onUp={() => moveCourse(sem.semester, ci, -1)}
+                          onDown={() => moveCourse(sem.semester, ci, 1)}
+                        />
+                        <button
+                          type="button"
+                          onClick={() => setDetailCourse(c)}
+                          className="flex-1 min-w-0 flex items-center justify-between gap-3 bg-white rounded-md border border-slate-200 px-3 py-2 text-left hover:border-blue-300 hover:bg-blue-50/40 transition cursor-pointer"
+                        >
+                          <div className="min-w-0">
+                            <p className="text-sm font-medium text-slate-900">
+                              {c.courseCode} — {c.courseTitle}
+                              {c.shared && (
+                                <span className="ml-2 inline-flex items-center rounded bg-amber-50 border border-amber-200 px-1.5 py-0.5 text-[10px] font-medium text-amber-800 align-middle">
+                                  Shared — owned by {c.ownerCode}
+                                </span>
+                              )}
+                            </p>
+                            <p className="text-xs text-slate-500">{c.faculty || 'No faculty assigned'}</p>
+                          </div>
+                          <Badge status={c.status} />
+                        </button>
+                      </div>
                     ))}
                   </div>
                 )}
@@ -325,6 +356,23 @@ function OverviewTab({ departments, loading }) {
 // Per-department curriculum revision date — printed in the exported document
 // header (the master copy shows e.g. 23.03.2026, the date the revision was
 // finalized, not the export date). One date covers the whole department book.
+// Small up/down arrow pair used for manual display ordering (departments in
+// this tab, courses in the Overview accordion). Disabled at list edges.
+function ReorderArrows({ onUp, onDown, isFirst, isLast, label }) {
+  const btn =
+    'px-1.5 py-0.5 text-xs rounded border border-slate-200 text-slate-500 hover:bg-slate-100 hover:text-slate-800 disabled:opacity-30 disabled:cursor-default cursor-pointer';
+  return (
+    <span className="inline-flex flex-col gap-0.5 shrink-0">
+      <button type="button" className={btn} disabled={isFirst} title={`Move ${label} up`} onClick={onUp}>
+        ▲
+      </button>
+      <button type="button" className={btn} disabled={isLast} title={`Move ${label} down`} onClick={onDown}>
+        ▼
+      </button>
+    </span>
+  );
+}
+
 function RevisionDateRow({ department, onSaved }) {
   const { token } = useAuth();
   const toast = useToast();
@@ -401,6 +449,23 @@ function DepartmentsTab({ onCreated }) {
     }
   }
 
+  // Optimistic swap with its neighbor, then persist the full order; revert
+  // the local list if the reorder call fails.
+  async function moveDepartment(index, delta) {
+    const target = index + delta;
+    if (target < 0 || target >= departments.length) return;
+    const previous = departments;
+    const next = [...departments];
+    [next[index], next[target]] = [next[target], next[index]];
+    setDepartments(next);
+    try {
+      await api.admin.reorderDepartments(token, next.map((d) => d.id));
+    } catch (err) {
+      toast.error(err.message);
+      setDepartments(previous);
+    }
+  }
+
   return (
     <div className="space-y-6">
       <Card title="Create Department">
@@ -426,15 +491,26 @@ function DepartmentsTab({ onCreated }) {
       </Card>
 
       <Card
-        title="Curriculum Revision Date"
-        description="Printed in the exported document header (e.g. 23.03.2026). If unset, exports fall back to the download date."
+        title="Departments"
+        description="Use the arrows to set the order departments appear in combined exports and dropdowns. The date is printed in the exported document header (e.g. 23.03.2026); if unset, exports fall back to the download date."
       >
         {departments.length === 0 ? (
           <p className="text-sm text-slate-400 italic">No departments yet.</p>
         ) : (
           <div className="space-y-2 max-w-2xl">
-            {departments.map((d) => (
-              <RevisionDateRow key={d.id} department={d} onSaved={loadDepartments} />
+            {departments.map((d, i) => (
+              <div key={d.id} className="flex items-center gap-2">
+                <ReorderArrows
+                  label={d.code}
+                  isFirst={i === 0}
+                  isLast={i === departments.length - 1}
+                  onUp={() => moveDepartment(i, -1)}
+                  onDown={() => moveDepartment(i, 1)}
+                />
+                <div className="flex-1 min-w-0">
+                  <RevisionDateRow department={d} onSaved={loadDepartments} />
+                </div>
+              </div>
             ))}
           </div>
         )}
@@ -443,11 +519,39 @@ function DepartmentsTab({ onCreated }) {
   );
 }
 
+const USER_ROLE_SECTIONS = [
+  { role: 'top_admin', label: 'Top Admins' },
+  { role: 'sub_admin', label: 'Sub-Admins' },
+  { role: 'faculty', label: 'Faculty' },
+];
+
 function UsersTab({ departments }) {
-  const { token } = useAuth();
+  const { token, user: currentUser } = useAuth();
   const toast = useToast();
   const [userForm, setUserForm] = useState({ name: '', email: '', password: '', role: 'sub_admin', departmentId: '' });
   const [submitting, setSubmitting] = useState(false);
+  const [users, setUsers] = useState([]);
+  const [loadingUsers, setLoadingUsers] = useState(true);
+  // Inline confirm-before-delete, same reveal-then-Confirm pattern the app
+  // already uses for Reject and Reopen (no shared modal component exists).
+  const [confirmingId, setConfirmingId] = useState(null);
+  const [removingId, setRemovingId] = useState(null);
+
+  async function loadUsers() {
+    setLoadingUsers(true);
+    try {
+      setUsers(await api.users.list(token));
+    } catch (err) {
+      toast.error(err.message);
+    } finally {
+      setLoadingUsers(false);
+    }
+  }
+
+  useEffect(() => {
+    loadUsers();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   async function handleCreateUser(e) {
     e.preventDefault();
@@ -456,6 +560,7 @@ function UsersTab({ departments }) {
       await api.users.create(token, userForm);
       setUserForm({ name: '', email: '', password: '', role: 'sub_admin', departmentId: '' });
       toast.success('User created.');
+      loadUsers();
     } catch (err) {
       toast.error(err.message);
     } finally {
@@ -463,7 +568,22 @@ function UsersTab({ departments }) {
     }
   }
 
+  async function handleDelete(u) {
+    setRemovingId(u.id);
+    try {
+      await api.users.remove(token, u.id);
+      toast.success(`${u.name} deleted.`);
+      setConfirmingId(null);
+      loadUsers();
+    } catch (err) {
+      toast.error(err.message);
+    } finally {
+      setRemovingId(null);
+    }
+  }
+
   return (
+    <div className="space-y-6">
     <Card title="Create User" description="Sub-admins and faculty are scoped to a single department.">
       <form onSubmit={handleCreateUser} className="space-y-3 max-w-md">
         <input
@@ -473,14 +593,21 @@ function UsersTab({ departments }) {
           value={userForm.name}
           onChange={(e) => setUserForm({ ...userForm, name: e.target.value })}
         />
-        <input
-          type="email"
-          className={inputClass}
-          placeholder="Email"
-          required
-          value={userForm.email}
-          onChange={(e) => setUserForm({ ...userForm, email: e.target.value })}
-        />
+        <div>
+          <input
+            type="email"
+            className={inputClass}
+            placeholder="Email"
+            required
+            value={userForm.email}
+            onChange={(e) => setUserForm({ ...userForm, email: e.target.value })}
+          />
+          {userForm.role === 'faculty' && (
+            <span className="block text-xs text-slate-500 mt-1">
+              Faculty accounts need an institutional email (@currisync.edu or @psgitech.ac.in).
+            </span>
+          )}
+        </div>
         <input
           type="password"
           className={inputClass}
@@ -516,6 +643,90 @@ function UsersTab({ departments }) {
         </Button>
       </form>
     </Card>
+
+    <Card title="Manage Users" description="Every user across every department, grouped by role.">
+      {loadingUsers ? (
+        <div className="flex items-center gap-2 text-slate-500 text-sm py-6">
+          <Spinner /> Loading users…
+        </div>
+      ) : users.length === 0 ? (
+        <EmptyState title="No users yet" description="Create a sub-admin or faculty member above." />
+      ) : (
+        <div className="space-y-5">
+          {USER_ROLE_SECTIONS.map((section) => {
+            const sectionUsers = users.filter((u) => u.role === section.role);
+            if (sectionUsers.length === 0) return null;
+            return (
+              <div key={section.role}>
+                <h4 className="text-sm font-semibold text-slate-700 mb-2">
+                  {section.label} ({sectionUsers.length})
+                </h4>
+                <div className="space-y-2">
+                  {sectionUsers.map((u) => {
+                    const isSelf = u.id === currentUser?.id;
+                    return (
+                      <div
+                        key={u.id}
+                        className="flex items-center justify-between gap-3 bg-white rounded-md border border-slate-200 px-3 py-2"
+                      >
+                        <div className="min-w-0">
+                          <p className="text-sm font-medium text-slate-900 truncate">{u.name}</p>
+                          <p className="text-xs text-slate-500 truncate">
+                            {u.email}
+                            {u.department?.name && <span> · {u.department.name}</span>}
+                          </p>
+                        </div>
+                        <div className="shrink-0">
+                          {isSelf ? (
+                            <span
+                              className="text-xs text-slate-400 cursor-not-allowed"
+                              title="You can't delete the account you're signed in with"
+                            >
+                              Signed in
+                            </span>
+                          ) : confirmingId === u.id ? (
+                            <span className="flex items-center gap-2">
+                              <span className="text-xs text-red-700">
+                                Permanently delete {u.name} ({u.email})?
+                              </span>
+                              <Button
+                                variant="danger"
+                                size="sm"
+                                loading={removingId === u.id}
+                                onClick={() => handleDelete(u)}
+                              >
+                                Confirm Delete
+                              </Button>
+                              <Button
+                                variant="secondary"
+                                size="sm"
+                                disabled={removingId === u.id}
+                                onClick={() => setConfirmingId(null)}
+                              >
+                                Cancel
+                              </Button>
+                            </span>
+                          ) : (
+                            <button
+                              type="button"
+                              className="text-sm text-red-600 hover:underline cursor-pointer"
+                              onClick={() => setConfirmingId(u.id)}
+                            >
+                              Delete
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </Card>
+    </div>
   );
 }
 

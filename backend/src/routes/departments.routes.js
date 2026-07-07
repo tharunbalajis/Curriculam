@@ -15,7 +15,11 @@ async function departmentsRoutes(fastify, options) {
   fastify.get('/', {
     preHandler: [fastify.authenticate, fastify.authorize(['top_admin', 'sub_admin'])],
     handler: async () => {
-      const departments = await fastify.prisma.departments.findMany({ orderBy: { name: 'asc' } });
+      // display_order first so dropdowns (e.g. the Download Center's) list
+      // departments in the same sequence the export prints them.
+      const departments = await fastify.prisma.departments.findMany({
+        orderBy: [{ display_order: 'asc' }, { name: 'asc' }],
+      });
       return departments.map(sanitizeDepartment);
     },
   });

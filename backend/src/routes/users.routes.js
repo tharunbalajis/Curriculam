@@ -1,5 +1,9 @@
 const bcrypt = require('bcryptjs');
 
+// Institutional email domains accepted for FACULTY accounts (the restriction
+// has only ever applied to faculty — sub_admin/top_admin may use any email).
+const ALLOWED_FACULTY_EMAIL_DOMAINS = ['@currisync.edu', '@psgitech.ac.in'];
+
 function sanitizeUser(user) {
   return {
     id: user.id,
@@ -82,9 +86,11 @@ async function usersRoutes(fastify, options) {
       // Institutional email domain is required for faculty accounts only —
       // sub_admin and top_admin may use any valid email. This check is scoped
       // to account creation and must never be applied to /auth/login.
-      if (role === 'faculty' && !email.toLowerCase().endsWith('@currisync.edu')) {
+      const emailLower = email.toLowerCase();
+      const hasAllowedDomain = ALLOWED_FACULTY_EMAIL_DOMAINS.some((domain) => emailLower.endsWith(domain));
+      if (role === 'faculty' && !hasAllowedDomain) {
         throw fastify.httpErrors.badRequest(
-          'Faculty accounts must use an institutional (@currisync.edu) email address.'
+          `Faculty accounts must use an institutional email address (${ALLOWED_FACULTY_EMAIL_DOMAINS.join(' or ')}).`
         );
       }
 
@@ -93,15 +99,8 @@ async function usersRoutes(fastify, options) {
         throw fastify.httpErrors.badRequest('Department not found');
       }
 
-      if (role === 'faculty') {
-        const facultyCount = await fastify.prisma.users.count({
-          where: { department_id: departmentId, role: 'faculty' },
-        });
-        if (facultyCount >= 2) {
-          return reply.code(409).send({ message: 'This department already has 2 faculty members.' });
-        }
-      }
-
+      // Departments may have any number of faculty; only the sub-admin is
+      // unique per department (below).
       if (role === 'sub_admin') {
         const existingSubAdmin = await fastify.prisma.users.findFirst({
           where: { department_id: departmentId, role: 'sub_admin' },

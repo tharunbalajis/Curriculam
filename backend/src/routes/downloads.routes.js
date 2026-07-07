@@ -58,7 +58,16 @@ async function resolveCourses(prisma, user, filters) {
       tasks: { orderBy: { created_at: 'desc' }, take: 1 },
       department: true,
     },
-    orderBy: [{ department_id: 'asc' }, { semester: 'asc' }, { course_code: 'asc' }],
+    // Admin-controlled display_order first (departments, then courses within
+    // a semester); name/course_code are only the fallback for rows created
+    // without one — not reachable after the backfill migration, but safe.
+    orderBy: [
+      { department: { display_order: 'asc' } },
+      { department: { name: 'asc' } },
+      { semester: 'asc' },
+      { display_order: 'asc' },
+      { course_code: 'asc' },
+    ],
   });
 
   const requestedStatus = user.role === 'sub_admin' ? 'approved' : filters.status || 'approved';
