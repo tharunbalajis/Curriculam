@@ -40,6 +40,13 @@ function todayFormatted() {
   return `${pad(d.getDate())}.${pad(d.getMonth() + 1)}.${d.getFullYear()}`;
 }
 
+// DATE columns come back as UTC-midnight Date objects — format with UTC
+// getters so the printed day can't shift across timezones.
+function dateFormatted(d) {
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${pad(d.getUTCDate())}.${pad(d.getUTCMonth() + 1)}.${d.getUTCFullYear()}`;
+}
+
 function noBorderCell(text, opts = {}) {
   return new TableCell({
     children: [para(run(text, opts.runOpts), { alignment: opts.alignment })],
@@ -128,6 +135,17 @@ function rightTabParagraph(runsBeforeTab, tailText, opts = {}) {
   });
 }
 
+// Per-unit hours label matching the master exactly: "(9+3)" for a
+// lecture+tutorial unit, "(9)" when there are no tutorial hours (e.g. a
+// lab-only unit). Units saved before the lecture/tutorial split only carry
+// the legacy `hours` field — treated as the lecture figure.
+function unitHoursLabel(unit) {
+  const lectureHours = unit.lectureHours ?? unit.hours;
+  if (lectureHours == null) return '';
+  const tutorialHours = unit.tutorialHours ?? 0;
+  return tutorialHours > 0 ? `(${lectureHours}+${tutorialHours})` : `(${lectureHours})`;
+}
+
 function totalPeriodsLine(course) {
   const { totalLecturePeriods, totalTutorialPeriods, lectureHours, tutorialHours, practicalHours, credits } = course;
 
@@ -162,7 +180,7 @@ function buildCourseContent(course) {
 
   if (course.commonTo) {
     content.push(
-      para(run(`(${course.commonTo})`), { alignment: AlignmentType.CENTER, spacing: { after: 60 } })
+      para(run(`(${course.commonTo})`, { bold: true }), { alignment: AlignmentType.CENTER, spacing: { after: 60 } })
     );
   }
 
@@ -184,9 +202,13 @@ function buildCourseContent(course) {
   }
 
   for (const unit of course.syllabusUnits || []) {
-    const heading = (unit.unitTitle || '').toUpperCase();
+    // Strip any trailing colon/whitespace the author typed — the ": " below
+    // is always appended here, so a typed colon would double up.
+    const heading = (unit.unitTitle || '').replace(/[:\s]+$/, '').toUpperCase();
     const leadRuns = [run(`${heading}${heading ? ': ' : ''}`, { bold: true }), run(unit.content || '')];
-    content.push(rightTabParagraph(leadRuns, unit.hours != null ? `(${unit.hours})` : ''));
+    content.push(
+      rightTabParagraph(leadRuns, unitHoursLabel(unit), { alignment: AlignmentType.JUSTIFIED })
+    );
   }
 
   const totalLine = totalPeriodsLine(course);
@@ -224,9 +246,13 @@ function buildCourseContent(course) {
   return content;
 }
 
-function buildHeader() {
+// The master's header shows the fixed curriculum revision date (e.g.
+// 23.03.2026), not the export date — today's date is only a fallback for
+// departments that haven't set one yet.
+function buildHeader(revisionDate) {
+  const dateText = revisionDate ? dateFormatted(new Date(revisionDate)) : todayFormatted();
   return new Header({
-    children: [para(run(todayFormatted(), { size: 16 }), { alignment: AlignmentType.RIGHT })],
+    children: [para(run(dateText, { size: 16 }), { alignment: AlignmentType.RIGHT })],
   });
 }
 
@@ -242,7 +268,7 @@ function buildFooter() {
 
 // Public entry point: one or many courses -> a single .docx Buffer, each
 // course starting on its own page.
-async function generateCoursesDocx(courses) {
+async function generateCoursesDocx(courses, { revisionDate = null } = {}) {
   const children = [];
 
   courses.forEach((course, index) => {
@@ -254,7 +280,7 @@ async function generateCoursesDocx(courses) {
     sections: [
       {
         properties: { page: { margin: MARGIN } },
-        headers: { default: buildHeader() },
+        headers: { default: buildHeader(revisionDate) },
         footers: { default: buildFooter() },
         children,
       },

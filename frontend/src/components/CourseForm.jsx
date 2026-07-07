@@ -206,6 +206,19 @@ export default function CourseForm({ course, onChange, disabledFields = [], read
   const unitCount = course.syllabusUnits?.length || 5;
   const { totalPeriods, periodsPerUnit } = calculatePeriods(credits, unitCount);
 
+  // Live-computed from the per-unit hour splits, same pattern as Credits and
+  // Total Marks above — these are never typed in directly. Units saved before
+  // the lecture/tutorial split only carry the legacy `hours` field, which
+  // recorded the lecture figure.
+  const totalLecturePeriods = (course.syllabusUnits || []).reduce(
+    (sum, u) => sum + (Number(u.lectureHours ?? u.hours) || 0),
+    0
+  );
+  const totalTutorialPeriods = (course.syllabusUnits || []).reduce(
+    (sum, u) => sum + (Number(u.tutorialHours) || 0),
+    0
+  );
+
   const allBookEntries = (course.textbooks || []).map((t, idx) => ({ ...t, _idx: idx }));
   const textbookEntries = allBookEntries.filter((t) => t.bookType !== 'reference');
   const referenceEntries = allBookEntries.filter((t) => t.bookType === 'reference');
@@ -367,25 +380,11 @@ export default function CourseForm({ course, onChange, disabledFields = [], read
       </section>
 
       <section className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-        <Field label="Total Lecture Periods">
-          <input
-            type="number"
-            min={0}
-            className={inputClass}
-            value={course.totalLecturePeriods ?? ''}
-            disabled={isDisabled('totalLecturePeriods')}
-            onChange={(e) => set('totalLecturePeriods', Number(e.target.value))}
-          />
+        <Field label="Total Lecture Periods (computed from units)">
+          <input className={inputClass} value={totalLecturePeriods} disabled readOnly />
         </Field>
-        <Field label="Total Tutorial Periods">
-          <input
-            type="number"
-            min={0}
-            className={inputClass}
-            value={course.totalTutorialPeriods ?? ''}
-            disabled={isDisabled('totalTutorialPeriods')}
-            onChange={(e) => set('totalTutorialPeriods', Number(e.target.value))}
-          />
+        <Field label="Total Tutorial Periods (computed from units)">
+          <input className={inputClass} value={totalTutorialPeriods} disabled readOnly />
         </Field>
       </section>
 
@@ -401,7 +400,8 @@ export default function CourseForm({ course, onChange, disabledFields = [], read
                   unitNumber: (course.syllabusUnits?.length || 0) + 1,
                   unitTitle: '',
                   content: '',
-                  hours: 0,
+                  lectureHours: 0,
+                  tutorialHours: 0,
                 })
               }
             >
@@ -412,7 +412,7 @@ export default function CourseForm({ course, onChange, disabledFields = [], read
         <div className={`space-y-4 ${(course.syllabusUnits || []).length > 3 ? 'max-h-[32rem] overflow-y-auto pr-1' : ''}`}>
           {(course.syllabusUnits || []).map((unit, idx) => (
             <div key={idx} className="border border-slate-200 rounded-md p-4 space-y-3 bg-white shadow-sm animate-fade-in">
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+              <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
                 <Field label="Unit #">
                   <input
                     type="number"
@@ -425,18 +425,31 @@ export default function CourseForm({ course, onChange, disabledFields = [], read
                 <Field label={`Unit Title (≈${periodsPerUnit} periods)`}>
                   <input
                     className={inputClass}
+                    placeholder="Just the topic name — no colon needed, it's added automatically"
+                    title="Just the topic name — no colon needed, it's added automatically"
                     value={unit.unitTitle || ''}
                     disabled={readOnly}
                     onChange={(e) => setArrayItem('syllabusUnits', idx, { unitTitle: e.target.value })}
                   />
                 </Field>
-                <Field label="Hours">
+                <Field label="Lecture Hrs">
                   <input
                     type="number"
+                    min={0}
                     className={inputClass}
-                    value={unit.hours ?? ''}
+                    value={unit.lectureHours ?? unit.hours ?? ''}
                     disabled={readOnly}
-                    onChange={(e) => setArrayItem('syllabusUnits', idx, { hours: Number(e.target.value) })}
+                    onChange={(e) => setArrayItem('syllabusUnits', idx, { lectureHours: Number(e.target.value) })}
+                  />
+                </Field>
+                <Field label="Tutorial Hrs">
+                  <input
+                    type="number"
+                    min={0}
+                    className={inputClass}
+                    value={unit.tutorialHours ?? ''}
+                    disabled={readOnly}
+                    onChange={(e) => setArrayItem('syllabusUnits', idx, { tutorialHours: Number(e.target.value) })}
                   />
                 </Field>
                 {!readOnly && (

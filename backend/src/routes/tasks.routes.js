@@ -1,4 +1,4 @@
-const { sanitizeCourse, courseInclude, replaceCourseChildren, courseChildSchema } = require('./courses.routes');
+const { sanitizeCourse, courseInclude, replaceCourseChildren, courseChildSchema, computeTotalPeriods } = require('./courses.routes');
 const emailService = require('../services/email.service');
 
 function buildScalarCourseData(body, { includeCodeAndTitle = true } = {}) {
@@ -18,11 +18,13 @@ function buildScalarCourseData(body, { includeCodeAndTitle = true } = {}) {
   if (body.eseMarks !== undefined) data.ese_marks = body.eseMarks;
   if (body.category !== undefined) data.category = body.category;
   if (body.introduction !== undefined) data.introduction = body.introduction;
-  if (body.totalLecturePeriods !== undefined) data.total_lecture_periods = body.totalLecturePeriods;
-  if (body.totalTutorialPeriods !== undefined) data.total_tutorial_periods = body.totalTutorialPeriods;
   // Note: commonTo is identity metadata (like course_code/course_title) set
   // by top_admin at course creation — faculty submissions never touch it.
   if (body.prerequisites !== undefined) data.prerequisites = body.prerequisites;
+
+  // total periods are derived from the submitted units, never taken from the
+  // client — same rule as the admin course routes.
+  Object.assign(data, computeTotalPeriods(body));
 
   return data;
 }

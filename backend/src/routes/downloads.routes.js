@@ -128,8 +128,17 @@ async function downloadsRoutes(fastify, options) {
 
       const sanitized = courses.map((c) => ({ ...sanitizeCourse(c), departmentName: c.department?.name }));
 
+      // Header revision date: only meaningful when the export covers a single
+      // department (one revision date covers a whole department's curriculum
+      // book). Cross-department exports fall back to today's date.
+      const departmentIds = [...new Set(courses.map((c) => c.department_id).filter(Boolean))];
+      const revisionDate =
+        departmentIds.length === 1
+          ? courses.find((c) => c.department)?.department?.revision_date || null
+          : null;
+
       const buffer =
-        format === 'pdf' ? await generateCoursesPdf(sanitized) : await generateCoursesDocx(sanitized);
+        format === 'pdf' ? await generateCoursesPdf(sanitized) : await generateCoursesDocx(sanitized, { revisionDate });
 
       const departments = await fastify.prisma.departments.findMany();
       const fileName = `${buildFileName({ departmentId, semester, courseIds, departments })}.${format}`;

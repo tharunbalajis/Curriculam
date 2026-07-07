@@ -145,11 +145,68 @@ function OverviewTab({ departments, loading }) {
   );
 }
 
+// Per-department curriculum revision date — printed in the exported document
+// header (the master copy shows e.g. 23.03.2026, the date the revision was
+// finalized, not the export date). One date covers the whole department book.
+function RevisionDateRow({ department, onSaved }) {
+  const { token } = useAuth();
+  const toast = useToast();
+  const [value, setValue] = useState(department.revisionDate || '');
+  const [saving, setSaving] = useState(false);
+
+  async function save() {
+    setSaving(true);
+    try {
+      await api.departments.update(token, department.id, { revisionDate: value || null });
+      toast.success(`Revision date ${value ? 'saved' : 'cleared'} for ${department.code}.`);
+      onSaved();
+    } catch (err) {
+      toast.error(err.message);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="flex items-center justify-between gap-3 border border-slate-200 rounded-md px-3 py-2 bg-white">
+      <div className="min-w-0">
+        <p className="text-sm font-medium text-slate-900 truncate">{department.name}</p>
+        <p className="text-xs text-slate-500">{department.code}</p>
+      </div>
+      <div className="flex items-center gap-2 shrink-0">
+        <input
+          type="date"
+          className={inputClass}
+          value={value}
+          onChange={(e) => setValue(e.target.value)}
+        />
+        <Button type="button" loading={saving} onClick={save}>
+          Save
+        </Button>
+      </div>
+    </div>
+  );
+}
+
 function DepartmentsTab({ onCreated }) {
   const { token } = useAuth();
   const toast = useToast();
   const [deptForm, setDeptForm] = useState({ name: '', code: '' });
   const [submitting, setSubmitting] = useState(false);
+  const [departments, setDepartments] = useState([]);
+
+  async function loadDepartments() {
+    try {
+      setDepartments(await api.departments.list(token));
+    } catch (err) {
+      toast.error(err.message);
+    }
+  }
+
+  useEffect(() => {
+    loadDepartments();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   async function handleCreateDepartment(e) {
     e.preventDefault();
@@ -159,6 +216,7 @@ function DepartmentsTab({ onCreated }) {
       setDeptForm({ name: '', code: '' });
       toast.success('Department created.');
       onCreated();
+      loadDepartments();
     } catch (err) {
       toast.error(err.message);
     } finally {
@@ -167,27 +225,44 @@ function DepartmentsTab({ onCreated }) {
   }
 
   return (
-    <Card title="Create Department">
-      <form onSubmit={handleCreateDepartment} className="space-y-3 max-w-md">
-        <input
-          className={inputClass}
-          placeholder="Name"
-          required
-          value={deptForm.name}
-          onChange={(e) => setDeptForm({ ...deptForm, name: e.target.value })}
-        />
-        <input
-          className={inputClass}
-          placeholder="Code"
-          required
-          value={deptForm.code}
-          onChange={(e) => setDeptForm({ ...deptForm, code: e.target.value })}
-        />
-        <Button type="submit" loading={submitting}>
-          Create
-        </Button>
-      </form>
-    </Card>
+    <div className="space-y-6">
+      <Card title="Create Department">
+        <form onSubmit={handleCreateDepartment} className="space-y-3 max-w-md">
+          <input
+            className={inputClass}
+            placeholder="Name"
+            required
+            value={deptForm.name}
+            onChange={(e) => setDeptForm({ ...deptForm, name: e.target.value })}
+          />
+          <input
+            className={inputClass}
+            placeholder="Code"
+            required
+            value={deptForm.code}
+            onChange={(e) => setDeptForm({ ...deptForm, code: e.target.value })}
+          />
+          <Button type="submit" loading={submitting}>
+            Create
+          </Button>
+        </form>
+      </Card>
+
+      <Card
+        title="Curriculum Revision Date"
+        description="Printed in the exported document header (e.g. 23.03.2026). If unset, exports fall back to the download date."
+      >
+        {departments.length === 0 ? (
+          <p className="text-sm text-slate-400 italic">No departments yet.</p>
+        ) : (
+          <div className="space-y-2 max-w-2xl">
+            {departments.map((d) => (
+              <RevisionDateRow key={d.id} department={d} onSaved={loadDepartments} />
+            ))}
+          </div>
+        )}
+      </Card>
+    </div>
   );
 }
 

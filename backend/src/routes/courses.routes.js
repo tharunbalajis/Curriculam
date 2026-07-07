@@ -33,6 +33,10 @@ function sanitizeCourse(course) {
       unitTitle: u.unit_title,
       content: u.content,
       hours: u.hours,
+      // Rows written before the L/T split (or via old clients) only have
+      // `hours`, which always recorded the lecture figure — fall back to it.
+      lectureHours: u.lecture_hours ?? u.hours,
+      tutorialHours: u.tutorial_hours ?? 0,
     })),
     textbooks: (course.textbooks || []).map((t) => ({
       id: t.id,
@@ -81,12 +85,27 @@ function buildScalarCourseData(body, { includeCodeAndTitle = true } = {}) {
   if (body.eseMarks !== undefined) data.ese_marks = body.eseMarks;
   if (body.category !== undefined) data.category = body.category;
   if (body.introduction !== undefined) data.introduction = body.introduction;
-  if (body.totalLecturePeriods !== undefined) data.total_lecture_periods = body.totalLecturePeriods;
-  if (body.totalTutorialPeriods !== undefined) data.total_tutorial_periods = body.totalTutorialPeriods;
   if (body.commonTo !== undefined) data.common_to = body.commonTo;
   if (body.prerequisites !== undefined) data.prerequisites = body.prerequisites;
 
+  // total_lecture_periods / total_tutorial_periods are always derived from
+  // the submitted units — client-supplied values are ignored so the stored
+  // totals can never drift from the units, even via direct API calls.
+  Object.assign(data, computeTotalPeriods(body));
+
   return data;
+}
+
+// Sums per-unit lecture/tutorial hours into the course-level totals. Units
+// saved before the L/T split only carry `hours` (a lecture figure), so it is
+// used as the lecture fallback. Returns {} when no units were submitted so
+// existing totals are left untouched.
+function computeTotalPeriods(body) {
+  if (!Array.isArray(body.syllabusUnits)) return {};
+  return {
+    total_lecture_periods: body.syllabusUnits.reduce((sum, u) => sum + (u.lectureHours ?? u.hours ?? 0), 0),
+    total_tutorial_periods: body.syllabusUnits.reduce((sum, u) => sum + (u.tutorialHours ?? 0), 0),
+  };
 }
 
 // Replace-all-on-save for a course's child rows: syllabus units, textbooks
@@ -104,7 +123,11 @@ async function replaceCourseChildren(prisma, courseId, body) {
         unit_number: u.unitNumber,
         unit_title: u.unitTitle || null,
         content: u.content,
-        hours: u.hours ?? null,
+        // Deprecated single-hours column: kept in sync with the lecture
+        // figure so pre-split readers keep working.
+        hours: u.lectureHours ?? u.hours ?? null,
+        lecture_hours: u.lectureHours ?? u.hours ?? null,
+        tutorial_hours: u.tutorialHours ?? 0,
       })),
     });
   }
@@ -158,6 +181,8 @@ const courseChildSchema = {
         unitTitle: { type: ['string', 'null'] },
         content: { type: 'string' },
         hours: { type: ['integer', 'null'] },
+        lectureHours: { type: ['integer', 'null'] },
+        tutorialHours: { type: ['integer', 'null'] },
       },
     },
   },
@@ -356,3 +381,4 @@ module.exports.sanitizeCourse = sanitizeCourse;
 module.exports.courseInclude = courseInclude;
 module.exports.replaceCourseChildren = replaceCourseChildren;
 module.exports.courseChildSchema = courseChildSchema;
+module.exports.computeTotalPeriods = computeTotalPeriods;
