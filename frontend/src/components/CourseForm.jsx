@@ -203,6 +203,48 @@ export default function CourseForm({ course, onChange, disabledFields = [], read
 
   const credits = computeCredits(course.lectureHours, course.tutorialHours, course.practicalHours);
   const totalMarks = computeTotalMarks(course.caMarks, course.eseMarks);
+
+  // Course type is DERIVED from existing course state, not a parallel state
+  // variable — same bucketing the exported scheme table uses: category 'MC'
+  // wins, then lab-only hours mean Practicals, everything else is Theory
+  // (including theory courses with integrated practicals).
+  const courseType =
+    course.category === 'MC'
+      ? 'mandatory'
+      : !(Number(course.lectureHours) || 0) &&
+        !(Number(course.tutorialHours) || 0) &&
+        (Number(course.practicalHours) || 0) > 0
+      ? 'practicals'
+      : 'theory';
+
+  // Switching type rewrites the underlying fields (not just visibility) so a
+  // stale Lecture/Tutorial value can never linger and skew the computed
+  // credits after e.g. Theory -> Practicals.
+  function setCourseType(type) {
+    if (type === courseType) return;
+    if (type === 'practicals') {
+      onChange({
+        ...course,
+        lectureHours: 0,
+        tutorialHours: 0,
+        // Practicals means P > 0 by definition — seed a sensible default so
+        // the derived type actually switches.
+        practicalHours: (Number(course.practicalHours) || 0) > 0 ? course.practicalHours : 2,
+        category: course.category === 'MC' ? '' : course.category,
+      });
+    } else if (type === 'mandatory') {
+      // Grade-only per regulations (8.3.6.8/.9): no hours, no CA/ESE marks.
+      onChange({ ...course, category: 'MC', lectureHours: 0, tutorialHours: 0, practicalHours: 0, caMarks: 0, eseMarks: 0 });
+    } else {
+      onChange({
+        ...course,
+        category: course.category === 'MC' ? '' : course.category,
+        // Theory means some lecture hours — seed the same default the Create
+        // Course form uses so the derived type switches away from lab-only.
+        lectureHours: (Number(course.lectureHours) || 0) > 0 ? course.lectureHours : 3,
+      });
+    }
+  }
   const unitCount = course.syllabusUnits?.length || 5;
   const { totalPeriods, periodsPerUnit } = calculatePeriods(credits, unitCount);
 
@@ -316,70 +358,91 @@ export default function CourseForm({ course, onChange, disabledFields = [], read
       <section>
         <h3 className="text-base font-semibold text-slate-800 mb-3">LTPC</h3>
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
-          <Field label="Lecture Hours">
-            <input
-              type="number"
-              min={0}
+          <Field label="Course Type">
+            <select
               className={inputClass}
-              value={course.lectureHours ?? 0}
-              disabled={isDisabled('lectureHours')}
-              onChange={(e) => set('lectureHours', Number(e.target.value))}
-            />
+              value={courseType}
+              disabled={readOnly}
+              onChange={(e) => setCourseType(e.target.value)}
+            >
+              <option value="theory">Theory</option>
+              <option value="practicals">Practicals</option>
+              <option value="mandatory">Mandatory Course</option>
+            </select>
           </Field>
-          <Field label="Tutorial Hours">
-            <input
-              type="number"
-              min={0}
-              className={inputClass}
-              value={course.tutorialHours ?? 0}
-              disabled={isDisabled('tutorialHours')}
-              onChange={(e) => set('tutorialHours', Number(e.target.value))}
-            />
-          </Field>
-          <Field label="Practical Hours">
-            <input
-              type="number"
-              min={0}
-              className={inputClass}
-              value={course.practicalHours ?? 0}
-              disabled={isDisabled('practicalHours')}
-              onChange={(e) => set('practicalHours', Number(e.target.value))}
-            />
-          </Field>
+          {courseType === 'theory' && (
+            <Field label="Lecture Hours">
+              <input
+                type="number"
+                min={0}
+                className={inputClass}
+                value={course.lectureHours ?? 0}
+                disabled={isDisabled('lectureHours')}
+                onChange={(e) => set('lectureHours', Number(e.target.value))}
+              />
+            </Field>
+          )}
+          {courseType === 'theory' && (
+            <Field label="Tutorial Hours">
+              <input
+                type="number"
+                min={0}
+                className={inputClass}
+                value={course.tutorialHours ?? 0}
+                disabled={isDisabled('tutorialHours')}
+                onChange={(e) => set('tutorialHours', Number(e.target.value))}
+              />
+            </Field>
+          )}
+          {courseType !== 'mandatory' && (
+            <Field label="Practical Hours">
+              <input
+                type="number"
+                min={0}
+                className={inputClass}
+                value={course.practicalHours ?? 0}
+                disabled={isDisabled('practicalHours')}
+                onChange={(e) => set('practicalHours', Number(e.target.value))}
+              />
+            </Field>
+          )}
           <Field label="Credits (computed)">
             <input className={inputClass} value={credits} disabled readOnly />
           </Field>
         </div>
       </section>
 
-      <section>
-        <h3 className="text-base font-semibold text-slate-800 mb-3">Marks</h3>
-        <div className="grid grid-cols-2 sm:grid-cols-3 gap-4">
-          <Field label="CA Marks">
-            <input
-              type="number"
-              min={0}
-              className={inputClass}
-              value={course.caMarks ?? 0}
-              disabled={isDisabled('caMarks')}
-              onChange={(e) => set('caMarks', Number(e.target.value))}
-            />
-          </Field>
-          <Field label="ESE Marks">
-            <input
-              type="number"
-              min={0}
-              className={inputClass}
-              value={course.eseMarks ?? 0}
-              disabled={isDisabled('eseMarks')}
-              onChange={(e) => set('eseMarks', Number(e.target.value))}
-            />
-          </Field>
-          <Field label="Total Marks (computed)">
-            <input className={inputClass} value={totalMarks} disabled readOnly />
-          </Field>
-        </div>
-      </section>
+      {/* Mandatory courses are grade-only (regulations 8.3.6.8/.9) — no CA/ESE. */}
+      {courseType !== 'mandatory' && (
+        <section>
+          <h3 className="text-base font-semibold text-slate-800 mb-3">Marks</h3>
+          <div className="grid grid-cols-2 sm:grid-cols-3 gap-4">
+            <Field label="CA Marks">
+              <input
+                type="number"
+                min={0}
+                className={inputClass}
+                value={course.caMarks ?? 0}
+                disabled={isDisabled('caMarks')}
+                onChange={(e) => set('caMarks', Number(e.target.value))}
+              />
+            </Field>
+            <Field label="ESE Marks">
+              <input
+                type="number"
+                min={0}
+                className={inputClass}
+                value={course.eseMarks ?? 0}
+                disabled={isDisabled('eseMarks')}
+                onChange={(e) => set('eseMarks', Number(e.target.value))}
+              />
+            </Field>
+            <Field label="Total Marks (computed)">
+              <input className={inputClass} value={totalMarks} disabled readOnly />
+            </Field>
+          </div>
+        </section>
+      )}
 
       <section>
         <Field label="Introduction">

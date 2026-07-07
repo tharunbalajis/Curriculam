@@ -140,7 +140,29 @@ async function downloadsRoutes(fastify, options) {
         return reply.code(404).send({ message: 'No courses match the selected filters.' });
       }
 
-      const sanitized = courses.map((c) => ({ ...sanitizeCourse(c), departmentName: c.department?.name }));
+      const departments = await fastify.prisma.departments.findMany();
+
+      // When the export is scoped to one target department, every course —
+      // owned or pulled in via common-to — must carry that department's name,
+      // because buildSchemeBlocks() groups strictly by departmentName: a
+      // shared-in course keeping its owner's name would split the scheme into
+      // a second department block/table. Owned courses have the same name
+      // either way. Only an unscoped top_admin export ("all departments")
+      // falls back to each course's true owning department.
+      const targetDepartmentId =
+        request.user.role === 'sub_admin'
+          ? request.user.departmentId
+          : departmentId && departmentId !== 'all'
+          ? departmentId
+          : null;
+      const targetDepartmentName = targetDepartmentId
+        ? departments.find((d) => d.id === targetDepartmentId)?.name || null
+        : null;
+
+      const sanitized = courses.map((c) => ({
+        ...sanitizeCourse(c),
+        departmentName: targetDepartmentName || c.department?.name,
+      }));
 
       // Header revision date: only meaningful when the export covers a single
       // department (one revision date covers a whole department's curriculum
@@ -154,7 +176,6 @@ async function downloadsRoutes(fastify, options) {
       const buffer =
         format === 'pdf' ? await generateCoursesPdf(sanitized) : await generateCoursesDocx(sanitized, { revisionDate });
 
-      const departments = await fastify.prisma.departments.findMany();
       const fileName = `${buildFileName({ departmentId, semester, courseIds, departments })}.${format}`;
 
       await fastify.prisma.download_history.create({

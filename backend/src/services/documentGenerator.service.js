@@ -89,7 +89,7 @@ function buildCourseOutcomesTable(courseOutcomes) {
         children: [
           noBorderCell(co.coNumber || '', { runOpts: { bold: true } }),
           noBorderCell(co.description || ''),
-          noBorderCell(co.bloomsLevel || ''),
+          noBorderCell(co.bloomsLevel || '', { runOpts: { bold: true }, alignment: AlignmentType.CENTER }),
         ],
       })
   );
