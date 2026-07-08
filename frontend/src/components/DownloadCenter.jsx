@@ -58,6 +58,13 @@ export default function DownloadCenter() {
   const [exporting, setExporting] = useState(false);
   const [history, setHistory] = useState(null);
   const [showDeptOrder, setShowDeptOrder] = useState(false);
+  // Format ('docx' | 'pdf') awaiting confirmation in the preview panel; null
+  // when the panel is closed. Only used for explicit manual selections.
+  const [pendingFormat, setPendingFormat] = useState(null);
+
+  // Sets iterate in insertion order, so this is the user's click order —
+  // the same order handleExport already sends as courseIds.
+  const orderList = Array.from(selected);
 
   // Reordering needs an unambiguous target group: a specific semester AND
   // (for top_admin) a specific department. sub_admin is already pinned to
@@ -181,6 +188,14 @@ export default function DownloadCenter() {
     } finally {
       setExporting(false);
     }
+  }
+
+  // Manual selections get a confirmation preview (the click order matters and
+  // should be verified before the document is generated); bulk/filtered
+  // exports have no manual order to confirm and download immediately.
+  function requestExport(format) {
+    if (selected.size > 0) setPendingFormat(format);
+    else handleExport(format);
   }
 
   async function loadHistory() {
@@ -311,6 +326,14 @@ export default function DownloadCenter() {
                     </span>
                   </label>
                   <Badge status={c.status} />
+                  {selected.has(c.id) && (
+                    <span
+                      className="inline-flex items-center justify-center min-w-5 h-5 px-1 rounded-full bg-blue-600 text-white text-[11px] font-semibold shrink-0"
+                      title={`Selection order: ${orderList.indexOf(c.id) + 1}`}
+                    >
+                      {orderList.indexOf(c.id) + 1}
+                    </span>
+                  )}
                   <ReorderArrows
                     label={c.courseCode}
                     title={
@@ -338,12 +361,12 @@ export default function DownloadCenter() {
         </p>
 
         <div className="flex gap-2">
-          <Button onClick={() => handleExport('docx')} loading={exporting} disabled={courses.length === 0}>
+          <Button onClick={() => requestExport('docx')} loading={exporting} disabled={courses.length === 0}>
             Download Word (.docx)
           </Button>
           <Button
             variant="secondary"
-            onClick={() => handleExport('pdf')}
+            onClick={() => requestExport('pdf')}
             loading={exporting}
             disabled={courses.length === 0}
           >
@@ -351,6 +374,69 @@ export default function DownloadCenter() {
           </Button>
         </div>
       </Card>
+
+      {pendingFormat && (
+        <div
+          className="fixed inset-0 z-40 bg-black/40 overflow-y-auto p-4 sm:p-8"
+          onClick={() => setPendingFormat(null)}
+        >
+          <div
+            className="bg-white rounded-lg shadow-xl max-w-lg w-full mx-auto"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-start justify-between gap-4 border-b border-slate-200 px-5 py-4">
+              <div className="min-w-0">
+                <h3 className="font-semibold text-slate-900">Confirm export order</h3>
+                <p className="text-sm text-slate-500 mt-0.5">
+                  The {pendingFormat === 'docx' ? 'Word (.docx)' : 'PDF'} document will include these{' '}
+                  {orderList.length} course(s) in this order.
+                </p>
+              </div>
+              <button
+                type="button"
+                className="text-slate-400 hover:text-slate-700 text-xl leading-none px-1"
+                aria-label="Close"
+                onClick={() => setPendingFormat(null)}
+              >
+                ×
+              </button>
+            </div>
+            <div className="max-h-80 overflow-y-auto divide-y divide-slate-100 px-5">
+              {orderList.map((id, i) => {
+                const c = courses.find((course) => course.id === id);
+                if (!c) return null;
+                return (
+                  <div key={id} className="flex items-center gap-3 py-2 text-sm">
+                    <span className="inline-flex items-center justify-center min-w-5 h-5 px-1 rounded-full bg-blue-600 text-white text-[11px] font-semibold shrink-0">
+                      {i + 1}
+                    </span>
+                    <span className="flex-1 min-w-0">
+                      {c.courseCode} — {c.courseTitle}{' '}
+                      <span className="text-slate-400">
+                        ({c.departmentCode}, Sem {c.semester})
+                      </span>
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+            <div className="flex justify-end gap-2 border-t border-slate-200 px-5 py-4">
+              <Button variant="secondary" onClick={() => setPendingFormat(null)}>
+                Cancel
+              </Button>
+              <Button
+                onClick={() => {
+                  const format = pendingFormat;
+                  setPendingFormat(null);
+                  handleExport(format);
+                }}
+              >
+                Confirm &amp; Download
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {isTopAdmin && (
         <Card

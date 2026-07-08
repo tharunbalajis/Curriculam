@@ -70,6 +70,15 @@ async function resolveCourses(prisma, user, filters) {
     ],
   });
 
+  // An explicit courseIds selection carries the user's manual click order —
+  // re-sort in JS to honour it, since Prisma's `id: { in: [...] }` can't
+  // order by array position and the orderBy above would otherwise win.
+  // Bulk exports (no courseIds) keep the admin-controlled display order.
+  if (Array.isArray(filters.courseIds) && filters.courseIds.length) {
+    const orderIndex = new Map(filters.courseIds.map((id, i) => [id, i]));
+    courses.sort((a, b) => orderIndex.get(a.id) - orderIndex.get(b.id));
+  }
+
   const requestedStatus = user.role === 'sub_admin' ? 'approved' : filters.status || 'approved';
 
   return courses
