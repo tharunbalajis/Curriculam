@@ -182,6 +182,9 @@ function DepartmentAccordionRow({ department }) {
   const [detail, setDetail] = useState(null);
   const [loadingDetail, setLoadingDetail] = useState(false);
   const [detailCourse, setDetailCourse] = useState(null);
+  const [deleteTarget, setDeleteTarget] = useState(null);
+  const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState(null);
 
   async function toggle() {
     const next = !expanded;
@@ -229,6 +232,25 @@ function DepartmentAccordionRow({ department }) {
     } catch (err) {
       toast.error(err.message);
       setDetail(previous);
+    }
+  }
+
+  // Deletion is irreversible (DB cascades wipe units, textbooks, outcomes,
+  // common-department links, and tasks), so it only fires from the explicit
+  // confirm button in the dialog below. A failed request keeps the dialog
+  // open with the error visible rather than silently closing.
+  async function confirmDeleteCourse() {
+    setDeleting(true);
+    setDeleteError(null);
+    try {
+      await api.courses.remove(token, deleteTarget.id);
+      toast.success(`${deleteTarget.courseCode} deleted.`);
+      setDeleteTarget(null);
+      await refreshDetail();
+    } catch (err) {
+      setDeleteError(err.message || 'Could not delete the course. Please try again.');
+    } finally {
+      setDeleting(false);
     }
   }
 
@@ -299,6 +321,18 @@ function DepartmentAccordionRow({ department }) {
                           </div>
                           <Badge status={c.status} />
                         </button>
+                        <button
+                          type="button"
+                          className="px-1.5 py-0.5 text-xs rounded border border-slate-200 text-slate-500 hover:bg-red-50 hover:border-red-300 hover:text-red-700 cursor-pointer shrink-0"
+                          title={`Delete ${c.courseCode}`}
+                          aria-label={`Delete ${c.courseCode}`}
+                          onClick={() => {
+                            setDeleteError(null);
+                            setDeleteTarget(c);
+                          }}
+                        >
+                          🗑
+                        </button>
                       </div>
                     ))}
                   </div>
@@ -315,6 +349,48 @@ function DepartmentAccordionRow({ department }) {
           onClose={() => setDetailCourse(null)}
           onReopened={refreshDetail}
         />
+      )}
+
+      {deleteTarget && (
+        <div
+          className="fixed inset-0 z-40 bg-black/40 overflow-y-auto p-4 sm:p-8"
+          onClick={() => !deleting && setDeleteTarget(null)}
+        >
+          <div
+            className="bg-white rounded-lg shadow-xl max-w-md w-full mx-auto"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="px-5 py-4 border-b border-slate-200">
+              <h3 className="font-semibold text-slate-900">Delete course</h3>
+            </div>
+            <div className="px-5 py-4 space-y-3">
+              <p className="text-sm text-slate-700">
+                Delete <span className="font-semibold">{deleteTarget.courseCode} — {deleteTarget.courseTitle}</span>?
+                This permanently removes the course and all of its syllabus units, textbooks, references, course
+                outcomes, and assigned tasks. This cannot be undone.
+              </p>
+              {deleteTarget.shared && (
+                <p className="text-sm text-amber-800 bg-amber-50 border border-amber-200 rounded-md px-3 py-2">
+                  This course is shared — deleting it removes it from its owning department ({deleteTarget.ownerCode})
+                  and every department it is common to.
+                </p>
+              )}
+              {deleteError && (
+                <p className="text-sm text-red-800 bg-red-50 border border-red-200 rounded-md px-3 py-2">
+                  {deleteError}
+                </p>
+              )}
+            </div>
+            <div className="flex justify-end gap-2 border-t border-slate-200 px-5 py-4">
+              <Button variant="secondary" disabled={deleting} onClick={() => setDeleteTarget(null)}>
+                Cancel
+              </Button>
+              <Button variant="danger" loading={deleting} onClick={confirmDeleteCourse}>
+                Delete
+              </Button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

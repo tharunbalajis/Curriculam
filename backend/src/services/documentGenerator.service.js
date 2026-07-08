@@ -253,8 +253,9 @@ function buildCourseContent(course) {
   }
 
   // Experiment-list practicals (25CS111 style): the introduction column
-  // holds one experiment per line, rendered as a dash-bulleted list; there
-  // are no prerequisites or syllabus units in this shape.
+  // holds one experiment per line, rendered exactly as typed (faculty write
+  // their own numbering — no added bullet or dash); there are no
+  // prerequisites or syllabus units in this shape.
   const isExperimentList = course.practicalFormat === 'experiment_list';
 
   content.push(
@@ -272,10 +273,13 @@ function buildCourseContent(course) {
 
   if (course.introduction) {
     if (isExperimentList) {
+      // Tight single-spaced list, same { after: 40 } the TEXT BOOKS /
+      // REFERENCES entries use — one-line items, unlike the paragraph-length
+      // syllabus units that get the larger 160 gap.
       for (const line of course.introduction.split(/\r?\n/)) {
         const experiment = line.trim();
         if (!experiment) continue;
-        content.push(para(run(`- ${experiment}`), { spacing: { after: 160 } }));
+        content.push(para(run(experiment), { spacing: { after: 40 } }));
       }
     } else {
       content.push(para(run(course.introduction), { spacing: { after: 120 } }));
