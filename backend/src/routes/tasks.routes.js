@@ -63,6 +63,7 @@ function buildScalarCourseData(body, { includeCodeAndTitle = true } = {}) {
   // Note: commonTo is identity metadata (like course_code/course_title) set
   // by top_admin at course creation — faculty submissions never touch it.
   if (body.prerequisites !== undefined) data.prerequisites = body.prerequisites;
+  if (body.practicalFormat !== undefined) data.practical_format = body.practicalFormat;
 
   // total periods are derived from the submitted units, never taken from the
   // client — same rule as the admin course routes.
@@ -248,6 +249,7 @@ const submitBodySchema = {
     totalLecturePeriods: { type: 'integer' },
     totalTutorialPeriods: { type: 'integer' },
     prerequisites: { type: 'string' },
+    practicalFormat: { type: 'string', enum: ['experiment_list', 'unit_wise'] },
     ...courseChildSchema,
   },
   additionalProperties: true,

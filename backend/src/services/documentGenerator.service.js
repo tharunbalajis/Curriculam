@@ -194,10 +194,12 @@ function unitHoursLabel(unit) {
 }
 
 function totalPeriodsLine(course) {
-  const { totalLecturePeriods, totalTutorialPeriods, lectureHours, tutorialHours, practicalHours, credits } = course;
+  const { totalLecturePeriods, totalTutorialPeriods, lectureHours, tutorialHours, practicalHours } = course;
 
   if (lectureHours === 0 && tutorialHours === 0 && practicalHours > 0) {
-    const totalPractical = totalLecturePeriods || Math.round(Number(credits) * 15) || 0;
+    // Fallback from practicalHours, NOT credits — credits already halves
+    // practical hours, so credits * 15 would print half the real figure.
+    const totalPractical = totalLecturePeriods || Math.round(Number(practicalHours) * 15) || 0;
     return `Total P: ${totalPractical} periods`;
   }
 
@@ -232,6 +234,29 @@ function buildCourseContent(course) {
     );
   }
 
+  // Descriptive mandatory course (Induction Programme / Activity Point
+  // Programme style): category MC with no hours at all. The master prints
+  // nothing but the title, the (Common to ...) line, and the description
+  // paragraph — no LTPC line, no marks, no units, no book lists, no CO
+  // tables. Graded mandatory courses (nonzero lecture/tutorial) fall
+  // through to the normal unit-wise layout below.
+  const isDescriptiveMandatory =
+    course.category === 'MC' &&
+    !(Number(course.lectureHours) || 0) &&
+    !(Number(course.tutorialHours) || 0) &&
+    !(Number(course.practicalHours) || 0);
+  if (isDescriptiveMandatory) {
+    if (course.introduction) {
+      content.push(para(run(course.introduction), { spacing: { after: 120 } }));
+    }
+    return content;
+  }
+
+  // Experiment-list practicals (25CS111 style): the introduction column
+  // holds one experiment per line, rendered as a dash-bulleted list; there
+  // are no prerequisites or syllabus units in this shape.
+  const isExperimentList = course.practicalFormat === 'experiment_list';
+
   content.push(
     para(run(`${course.lectureHours ?? 0} ${course.tutorialHours ?? 0} ${course.practicalHours ?? 0} ${course.credits ?? ''}`, { bold: true }), {
       alignment: AlignmentType.RIGHT,
@@ -239,17 +264,25 @@ function buildCourseContent(course) {
     })
   );
 
-  if (course.prerequisites) {
+  if (course.prerequisites && !isExperimentList) {
     content.push(
       para([run('Prerequisites: ', { bold: true }), run(course.prerequisites)], { spacing: { after: 120 } })
     );
   }
 
   if (course.introduction) {
-    content.push(para(run(course.introduction), { spacing: { after: 120 } }));
+    if (isExperimentList) {
+      for (const line of course.introduction.split(/\r?\n/)) {
+        const experiment = line.trim();
+        if (!experiment) continue;
+        content.push(para(run(`- ${experiment}`), { spacing: { after: 160 } }));
+      }
+    } else {
+      content.push(para(run(course.introduction), { spacing: { after: 120 } }));
+    }
   }
 
-  for (const unit of course.syllabusUnits || []) {
+  for (const unit of isExperimentList ? [] : course.syllabusUnits || []) {
     // Strip any trailing colon/whitespace the author typed — the ": " below
     // is always appended here, so a typed colon would double up.
     const heading = (unit.unitTitle || '').replace(/[:\s]+$/, '').toUpperCase();

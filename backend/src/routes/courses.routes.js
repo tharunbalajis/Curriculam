@@ -47,6 +47,7 @@ function sanitizeCourse(course) {
     commonToDepartments: commonDepartments,
     commonToDepartmentIds: commonDepartments.map((d) => d.id),
     prerequisites: course.prerequisites,
+    practicalFormat: course.practical_format,
     syllabusUnits: (course.syllabus_units || []).map((u) => ({
       id: u.id,
       unitNumber: u.unit_number,
@@ -107,6 +108,7 @@ function buildScalarCourseData(body, { includeCodeAndTitle = true } = {}) {
   if (body.introduction !== undefined) data.introduction = body.introduction;
   if (body.commonTo !== undefined) data.common_to = body.commonTo;
   if (body.prerequisites !== undefined) data.prerequisites = body.prerequisites;
+  if (body.practicalFormat !== undefined) data.practical_format = body.practicalFormat;
 
   // total_lecture_periods / total_tutorial_periods are always derived from
   // the submitted units — client-supplied values are ignored so the stored
@@ -340,6 +342,7 @@ async function coursesRoutes(fastify, options) {
           facultyUserId: { type: 'string' },
           deadline: { type: 'string', format: 'date' },
           prerequisites: { type: 'string' },
+          practicalFormat: { type: 'string', enum: ['experiment_list', 'unit_wise'] },
           ...courseChildSchema,
         },
       },
@@ -428,6 +431,7 @@ async function coursesRoutes(fastify, options) {
           commonTo: { type: 'string' },
           commonToDepartmentIds: { type: 'array', items: { type: 'string' } },
           prerequisites: { type: 'string' },
+          practicalFormat: { type: 'string', enum: ['experiment_list', 'unit_wise'] },
           ...courseChildSchema,
         },
       },

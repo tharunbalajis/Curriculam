@@ -1,3 +1,5 @@
+import { useEffect } from 'react';
+
 function computeCredits(lectureHours, tutorialHours, practicalHours) {
   const l = Number(lectureHours) || 0;
   const t = Number(tutorialHours) || 0;
@@ -217,6 +219,32 @@ export default function CourseForm({ course, onChange, disabledFields = [], read
       ? 'practicals'
       : 'theory';
 
+  // Practicals sub-shape, stored in courses.practical_format — a flat lab
+  // experiment list (25CS111) and a unit-wise practical course (25GE111
+  // Design Thinking) are identical from the hour fields alone, so unlike
+  // courseType this can't be derived. Legacy practicals saved before the
+  // field existed count as unit-wise when they already have units; otherwise
+  // default to the common lab shape, experiment_list.
+  const practicalFormat =
+    course.practicalFormat || ((course.syllabusUnits || []).length ? 'unit_wise' : 'experiment_list');
+  const isExperimentList = courseType === 'practicals' && practicalFormat === 'experiment_list';
+
+  // Mandatory sub-type IS derived, same pattern as courseType: any lecture or
+  // tutorial hours mean a graded syllabus course (Indian Constitution style);
+  // zero hours mean a description-only entry (Induction Programme style).
+  const mandatorySubtype =
+    (Number(course.lectureHours) || 0) > 0 || (Number(course.tutorialHours) || 0) > 0 ? 'graded' : 'descriptive';
+  const isDescriptiveMandatory = courseType === 'mandatory' && mandatorySubtype === 'descriptive';
+
+  // Materialize the defaulted format into state so a faculty member who never
+  // touches the selector still submits an explicit practicalFormat — the
+  // export generator branches only on the stored value, never on a guess.
+  useEffect(() => {
+    if (readOnly || courseType !== 'practicals' || course.practicalFormat) return;
+    set('practicalFormat', practicalFormat);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [courseType, course.practicalFormat]);
+
   // Switching type rewrites the underlying fields (not just visibility) so a
   // stale Lecture/Tutorial value can never linger and skew the computed
   // credits after e.g. Theory -> Practicals.
@@ -231,10 +259,22 @@ export default function CourseForm({ course, onChange, disabledFields = [], read
         // the derived type actually switches.
         practicalHours: (Number(course.practicalHours) || 0) > 0 ? course.practicalHours : 2,
         category: course.category === 'MC' ? '' : course.category,
+        practicalFormat,
       });
     } else if (type === 'mandatory') {
-      // Grade-only per regulations (8.3.6.8/.9): no hours, no CA/ESE marks.
-      onChange({ ...course, category: 'MC', lectureHours: 0, tutorialHours: 0, practicalHours: 0, caMarks: 0, eseMarks: 0 });
+      // Grade-only per regulations (8.3.6.8/.9): no CA/ESE marks, no lab
+      // hours. Lecture/Tutorial are KEPT — nonzero hours mean the graded
+      // sub-type (Indian Constitution, "2 0 0"); zero hours mean the
+      // description-only sub-type (Induction Programme).
+      onChange({
+        ...course,
+        category: 'MC',
+        lectureHours: Number(course.lectureHours) || 0,
+        tutorialHours: Number(course.tutorialHours) || 0,
+        practicalHours: 0,
+        caMarks: 0,
+        eseMarks: 0,
+      });
     } else {
       onChange({
         ...course,
@@ -343,17 +383,21 @@ export default function CourseForm({ course, onChange, disabledFields = [], read
         </Field>
       </section>
 
-      <section>
-        <Field label="Prerequisites">
-          <textarea
-            rows={2}
-            className={inputClass}
-            value={course.prerequisites || ''}
-            disabled={isDisabled('prerequisites')}
-            onChange={(e) => set('prerequisites', e.target.value)}
-          />
-        </Field>
-      </section>
+      {/* Experiment-list practicals and descriptive mandatory courses print
+          no Prerequisites line in the master — don't collect one. */}
+      {!isExperimentList && !isDescriptiveMandatory && (
+        <section>
+          <Field label="Prerequisites">
+            <textarea
+              rows={2}
+              className={inputClass}
+              value={course.prerequisites || ''}
+              disabled={isDisabled('prerequisites')}
+              onChange={(e) => set('prerequisites', e.target.value)}
+            />
+          </Field>
+        </section>
+      )}
 
       <section>
         <h3 className="text-base font-semibold text-slate-800 mb-3">LTPC</h3>
@@ -370,7 +414,20 @@ export default function CourseForm({ course, onChange, disabledFields = [], read
               <option value="mandatory">Mandatory Course</option>
             </select>
           </Field>
-          {courseType === 'theory' && (
+          {courseType === 'practicals' && (
+            <Field label="Practical Format" required>
+              <select
+                className={inputClass}
+                value={practicalFormat}
+                disabled={readOnly}
+                onChange={(e) => set('practicalFormat', e.target.value)}
+              >
+                <option value="experiment_list">Experiment List</option>
+                <option value="unit_wise">Unit-wise Content</option>
+              </select>
+            </Field>
+          )}
+          {(courseType === 'theory' || courseType === 'mandatory') && !isDescriptiveMandatory && (
             <Field label="Lecture Hours">
               <input
                 type="number"
@@ -382,7 +439,7 @@ export default function CourseForm({ course, onChange, disabledFields = [], read
               />
             </Field>
           )}
-          {courseType === 'theory' && (
+          {(courseType === 'theory' || courseType === 'mandatory') && !isDescriptiveMandatory && (
             <Field label="Tutorial Hours">
               <input
                 type="number"
@@ -406,9 +463,11 @@ export default function CourseForm({ course, onChange, disabledFields = [], read
               />
             </Field>
           )}
-          <Field label="Credits (computed)">
-            <input className={inputClass} value={credits} disabled readOnly />
-          </Field>
+          {!isDescriptiveMandatory && (
+            <Field label="Credits (computed)">
+              <input className={inputClass} value={credits} disabled readOnly />
+            </Field>
+          )}
         </div>
       </section>
 
@@ -444,10 +503,22 @@ export default function CourseForm({ course, onChange, disabledFields = [], read
         </section>
       )}
 
+      {/* The same underlying column serves three shapes: a prose introduction
+          (theory / unit-wise practicals), a one-experiment-per-line list
+          (experiment-list practicals), or the whole body of a descriptive
+          mandatory course. */}
       <section>
-        <Field label="Introduction">
+        <Field
+          label={
+            isExperimentList
+              ? 'List of Experiments (one per line)'
+              : isDescriptiveMandatory
+              ? 'Description'
+              : 'Introduction'
+          }
+        >
           <textarea
-            rows={3}
+            rows={isExperimentList ? 8 : 3}
             className={inputClass}
             value={course.introduction || ''}
             disabled={isDisabled('introduction')}
@@ -456,6 +527,7 @@ export default function CourseForm({ course, onChange, disabledFields = [], read
         </Field>
       </section>
 
+      {!isExperimentList && !isDescriptiveMandatory && (
       <section className="grid grid-cols-1 sm:grid-cols-2 gap-4">
         <Field label="Total Lecture Periods (computed from units)">
           <input className={inputClass} value={totalLecturePeriods} disabled readOnly />
@@ -464,7 +536,11 @@ export default function CourseForm({ course, onChange, disabledFields = [], read
           <input className={inputClass} value={totalTutorialPeriods} disabled readOnly />
         </Field>
       </section>
+      )}
 
+      {/* Experiment-list practicals and descriptive mandatory courses have no
+          unit-wise syllabus — their content lives in the field above. */}
+      {!isExperimentList && !isDescriptiveMandatory && (
       <section>
         <div className="flex items-center justify-between mb-3">
           <h3 className="text-base font-semibold text-slate-800">Syllabus Units</h3>
@@ -557,7 +633,9 @@ export default function CourseForm({ course, onChange, disabledFields = [], read
           Total Periods: <span className="font-medium text-slate-700">{totalPeriods}</span>
         </p>
       </section>
+      )}
 
+      {!isDescriptiveMandatory && (
       <BookEntrySection
         title="Text Books"
         bookType="textbook"
@@ -568,7 +646,9 @@ export default function CourseForm({ course, onChange, disabledFields = [], read
         readOnly={readOnly}
         emptyLabel="No textbooks added yet."
       />
+      )}
 
+      {!isDescriptiveMandatory && (
       <BookEntrySection
         title="References"
         bookType="reference"
@@ -579,7 +659,12 @@ export default function CourseForm({ course, onChange, disabledFields = [], read
         readOnly={readOnly}
         emptyLabel="No references added yet."
       />
+      )}
 
+      {/* Hidden only for descriptive mandatory courses; graded mandatory
+          keeps it visible but optional — the export already omits the CO
+          table when no outcomes exist. */}
+      {!isDescriptiveMandatory && (
       <section>
         <div className="flex items-center justify-between mb-3">
           <h3 className="text-base font-semibold text-slate-800">Course Outcomes</h3>
@@ -684,6 +769,7 @@ export default function CourseForm({ course, onChange, disabledFields = [], read
           ))}
         </div>
       </section>
+      )}
     </div>
   );
 }
